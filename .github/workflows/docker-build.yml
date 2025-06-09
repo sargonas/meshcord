@@ -27,9 +27,14 @@ jobs:
       - name: Extract release version
         id: version
         run: |
-          # Get version from release tag (remove 'v' prefix if present)
-          VERSION=${GITHUB_REF#refs/tags/}
-          VERSION=${VERSION#v}
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # For manual runs, use 'manual' or current date
+            VERSION="manual-$(date +%Y%m%d-%H%M%S)"
+          else
+            # For releases, extract from tag
+            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=${VERSION#v}
+          fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
       
       - name: Get release notes
