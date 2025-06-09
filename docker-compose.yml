@@ -1,0 +1,26 @@
+services:
+  meshtastic-discord-bot:
+    build: .
+    container_name: meshtastic-discord-bot
+    restart: unless-stopped
+    environment:
+      # Discord Configuration (REQUIRED)
+      - DISCORD_BOT_TOKEN=your_discord_bot_token_here
+      - DISCORD_CHANNEL_ID=your_discord_channel_id_here
+      
+      # Multiple radios (JSON format)
+      - RADIOS=[
+          {"name": "Home Radio", "host": "192.168.1.100", "port": "80"}, {"name": "Mobile Radio", "host": "meshtastic.local", "port": "80"}
+        ]
+      
+      # Single radio (fallback)
+      # - MESHTASTIC_HOST=192.168.1.100
+      # - MESHTASTIC_PORT=80
+      # - RADIO_NAME=My Radio
+      
+      # Polling interval in seconds
+      - POLL_INTERVAL=30
+      
+    volumes:
+      # Persist message tracking database
+      - ./data:/app/data
