@@ -6,8 +6,9 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # ensure releases are from main
-    if: github.event.release && (github.event.release.target_commitish == 'main' || github.event.release.target_commitish == 'master')
+    if: |
+      github.event_name == 'workflow_dispatch' || 
+      (github.event.release && github.event.release.target_commitish == 'main')
     
     steps:
       - name: Checkout repository
