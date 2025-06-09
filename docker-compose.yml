@@ -7,39 +7,43 @@ services:
     # Environment variables - REQUIRED: Set these values
     environment:
       # Discord Configuration (REQUIRED)
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID}
       
       # Connection Method (choose one)
-      - CONNECTION_METHOD=${CONNECTION_METHOD:-http}  # 'http' or 'serial'
+      CONNECTION_METHOD: ${CONNECTION_METHOD:-http}  # 'http' or 'serial'
       
       # HTTP Configuration (if using CONNECTION_METHOD=http)
-      - MESHTASTIC_HOST=${MESHTASTIC_HOST:-meshtastic.local}
-      - MESHTASTIC_PORT=${MESHTASTIC_PORT:-80}
-      - RADIO_NAME=${RADIO_NAME:-Radio}
-      - RADIO_DISPLAY_NAME=${RADIO_DISPLAY_NAME:-}
-      - POLL_INTERVAL=${POLL_INTERVAL:-2.0}
+      MESHTASTIC_HOST: ${MESHTASTIC_HOST:-meshtastic.local}
+      MESHTASTIC_PORT: ${MESHTASTIC_PORT:-80}
+      RADIO_NAME: ${RADIO_NAME:-Radio}
+      RADIO_DISPLAY_NAME: ${RADIO_DISPLAY_NAME:-}
+      POLL_INTERVAL: ${POLL_INTERVAL:-2.0}
       
       # Multiple Radios (JSON format, optional)
-      - RADIOS=${RADIOS:-}
+      # RADIOS: |
+      #   [
+      #     {"name": "radio1", "host": "192.168.1.100", "port": "80", "display_name": "Home Base"},
+      #     {"name": "radio2", "host": "192.168.1.101", "port": "80", "display_name": "Mobile Unit"}
+      #   ]
       
       # Serial Configuration (if using CONNECTION_METHOD=serial)
-      - SERIAL_PORT=${SERIAL_PORT:-/dev/ttyUSB0}
+      SERIAL_PORT: ${SERIAL_PORT:-/dev/ttyUSB0}
       
       # Message Filtering (optional - defaults shown)
-      - SHOW_TEXT_MESSAGES=${SHOW_TEXT_MESSAGES:-true}
-      - SHOW_POSITION_UPDATES=${SHOW_POSITION_UPDATES:-true}
-      - SHOW_NODE_INFO=${SHOW_NODE_INFO:-true}
-      - SHOW_TELEMETRY=${SHOW_TELEMETRY:-true}
-      - SHOW_ROUTING=${SHOW_ROUTING:-false}
-      - SHOW_ADMIN=${SHOW_ADMIN:-true}
-      - SHOW_DETECTION_SENSOR=${SHOW_DETECTION_SENSOR:-true}
-      - SHOW_RANGE_TEST=${SHOW_RANGE_TEST:-true}
-      - SHOW_STORE_FORWARD=${SHOW_STORE_FORWARD:-true}
-      - SHOW_UNKNOWN=${SHOW_UNKNOWN:-false}
+      SHOW_TEXT_MESSAGES: ${SHOW_TEXT_MESSAGES:-true}
+      SHOW_POSITION_UPDATES: ${SHOW_POSITION_UPDATES:-true}
+      SHOW_NODE_INFO: ${SHOW_NODE_INFO:-true}
+      SHOW_TELEMETRY: ${SHOW_TELEMETRY:-true}
+      SHOW_ROUTING: ${SHOW_ROUTING:-false}
+      SHOW_ADMIN: ${SHOW_ADMIN:-true}
+      SHOW_DETECTION_SENSOR: ${SHOW_DETECTION_SENSOR:-true}
+      SHOW_RANGE_TEST: ${SHOW_RANGE_TEST:-true}
+      SHOW_STORE_FORWARD: ${SHOW_STORE_FORWARD:-true}
+      SHOW_UNKNOWN: ${SHOW_UNKNOWN:-false}
       
       # Debug mode (optional)
-      - DEBUG_MODE=${DEBUG_MODE:-false}
+      DEBUG_MODE: ${DEBUG_MODE:-false}
     
     # Volumes for persistent data
     volumes:

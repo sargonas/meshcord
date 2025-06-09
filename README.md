@@ -1,60 +1,50 @@
-# 🌐 Meshcord - Enhanced Meshtastic Discord Bridge
+# Meshcord - Meshtastic Discord Bridge
 
-[![CI/CD Pipeline](https://github.com/sargonas/meshcord/actions/workflows/ci.yml/badge.svg)](https://github.com/sargonas/meshcord/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/sargonas/meshcord/branch/main/graph/badge.svg)](https://codecov.io/gh/sargonas/meshcord)
+[![Tests](https://github.com/sargonas/meshcord/actions/workflows/ci.yml/badge.svg)](https://github.com/sargonas/meshcord/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Docker Pulls](https://img.shields.io/docker/pulls/sargonas/meshcord)](https://hub.docker.com/r/sargonas/meshcord)
 
-A robust, feature-rich Discord bridge for Meshtastic networks with enterprise-grade reliability, comprehensive monitoring, and advanced message handling capabilities.
+A reliable Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay connected to your mesh network even when you're away from your radio!
 
-## ✨ Enhanced Features
+## Features
 
-### 🔌 **Dual Connection Methods**
+### Dual Connection Methods
 - **Serial Connection** (Recommended): 99.9% message reliability with direct USB connection
-- **HTTP API Connection**: Network-based with circuit breaker protection and retry logic
+- **HTTP API Connection**: Network-based connection for WiFi-enabled radios
 - **Multi-Radio Support**: Monitor multiple Meshtastic devices simultaneously
 
-### 📊 **Advanced Monitoring & Observability**
-- **Real-time Statistics**: Message processing metrics, error tracking, duplicate detection
-- **Health Checks**: Comprehensive container and application health monitoring
-- **Prometheus Integration**: Built-in metrics endpoint for monitoring dashboards
-- **Database Analytics**: Historical statistics and performance tracking
+### Smart Message Handling
+- **Real-time Discord integration** - Messages appear instantly in your Discord channel
+- **Signal strength reporting** - Includes SNR and RSSI data
+- **Duplicate prevention** - Automatic deduplication of repeat messages
+- **Persistent node database** - Remembers node names across restarts
+- **Custom radio names** - Friendly display names for multi-radio setups
 
-### 🛡️ **Enterprise-Grade Reliability**
-- **Circuit Breaker Pattern**: Automatic failure detection and recovery
-- **Exponential Backoff**: Intelligent retry mechanisms for network failures
-- **Graceful Shutdown**: Clean resource cleanup and connection handling
-- **Message Deduplication**: Prevents duplicate messages across polling cycles
+### Flexible Message Filtering
+- **Granular control** - Choose which message types to forward
+- **Smart node identification** - Shows friendly node names instead of hex IDs
+- **Enhanced message formatting** - Rich Discord messages with radio source identification
 
-### 🎛️ **Flexible Configuration**
-- **Granular Message Filtering**: Control exactly which message types are forwarded
-- **Dynamic Polling**: Adaptive polling intervals based on network activity
-- **Enhanced Message Formatting**: Rich Discord messages with signal strength data
-- **Multi-Environment Support**: Development, staging, and production configurations
-- **Custom Radio Names**: Friendly display names for multi-radio setups
+### Data Management
+- **Automatic database cleanup** - Configurable retention for processed messages
+- **Node information tracking** - Stores and displays node names and details
+- **Message deduplication** - Prevents duplicate messages across polling cycles
 
-### 🗄️ **Enhanced Data Management**
-- **Automatic Database Cleanup**: Configurable retention policies for messages and statistics
-- **Node Information Tracking**: Persistent storage of node names and hardware details
-- **Backup Integration**: Automated database backups with compression
-- **Performance Optimization**: WAL mode SQLite with proper indexing
-
-## 📋 Message Types & Icons
+## Message Types & Icons
 
 | Type | Description | Icon | Default |
 |------|-------------|------|---------|
-| 💬 Text Messages | Chat messages between nodes | 💬 | ✅ Enabled |
-| 📍 Position Updates | GPS location broadcasts with coordinates | 📍 | ✅ Enabled |
-| ℹ️ Node Information | Device information and friendly names | ℹ️ | ✅ Enabled |
-| 📊 Telemetry | Battery, temperature, and system metrics | 📊 | ✅ Enabled |
-| ⚙️ Admin Messages | Administrative commands and responses | ⚙️ | ✅ Enabled |
-| 🚨 Detection Sensor | Motion/presence detection alerts | 🚨 | ✅ Enabled |
-| 📏 Range Testing | Signal testing and range validation | 📏 | ✅ Enabled |
-| 💾 Store & Forward | Delayed message delivery notifications | 💾 | ✅ Enabled |
-| 🔄 Routing | Network routing information | 🔄 | ❌ Disabled |
-| ❓ Unknown | Unrecognized message types | ❓ | ❌ Disabled |
+| Text Messages | Chat messages between nodes | 💬 | Enabled |
+| Position Updates | GPS location broadcasts | 📍 | Enabled |
+| Node Information | Device information and friendly names | ℹ️ | Enabled |
+| Telemetry | Battery, temperature, and system metrics | 📊 | Enabled |
+| Admin Messages | Administrative commands and responses | ⚙️ | Enabled |
+| Detection Sensor | Motion/presence detection alerts | 🚨 | Enabled |
+| Range Testing | Signal testing and range validation | 📏 | Enabled |
+| Store & Forward | Delayed message delivery notifications | 💾 | Enabled |
+| Routing | Network routing information | 🔄 | Disabled |
+| Unknown | Unrecognized message types | ❓ | Disabled |
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Docker and Docker Compose
@@ -87,6 +77,58 @@ MESHTASTIC_HOST=192.168.1.100  # Your radio's IP
 ```
 
 ### 4. Deploy
+
+#### Option A: Using Pre-built Docker Image (Recommended)
+```bash
+# Create data volume
+docker volume create meshcord_data
+
+# Run with Docker directly
+docker run -d \
+  --name meshcord-bot \
+  --restart unless-stopped \
+  -e DISCORD_BOT_TOKEN=your_bot_token_here \
+  -e DISCORD_CHANNEL_ID=your_channel_id_here \
+  -e CONNECTION_METHOD=http \
+  -e MESHTASTIC_HOST=192.168.1.100 \
+  -v meshcord_data:/app/data \
+  ghcr.io/sargonas/meshcord:latest
+
+# Check logs
+docker logs -f meshcord-bot
+```
+
+#### Option B: Using Docker Compose with Pre-built Image
+Create a simple `docker-compose.yml`:
+```yaml
+services:
+  meshcord:
+    image: ghcr.io/sargonas/meshcord:latest
+    container_name: meshcord-bot
+    restart: unless-stopped
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID}
+      CONNECTION_METHOD: ${CONNECTION_METHOD:-http}
+      MESHTASTIC_HOST: ${MESHTASTIC_HOST:-meshtastic.local}
+      MESHTASTIC_PORT: ${MESHTASTIC_PORT:-80}
+      RADIO_NAME: ${RADIO_NAME:-Radio}
+      POLL_INTERVAL: ${POLL_INTERVAL:-2.0}
+      DEBUG_MODE: ${DEBUG_MODE:-false}
+    volumes:
+      - meshcord_data:/app/data
+
+volumes:
+  meshcord_data:
+```
+
+Then run:
+```bash
+docker-compose up -d
+docker-compose logs -f meshcord
+```
+
+#### Option C: Build from Source
 ```bash
 # Create data volume
 docker volume create meshcord_data
@@ -98,7 +140,7 @@ docker-compose up -d
 docker-compose logs -f meshcord
 ```
 
-## 🔧 Configuration Options
+## Configuration Options
 
 ### Connection Methods
 
@@ -121,91 +163,53 @@ POLL_INTERVAL=2.0  # Seconds between polls
 
 #### Multiple Radio Monitoring
 ```bash
-RADIOS=[
-  {"name": "radio1", "host": "192.168.1.100", "port": "80", "display_name": "Home Base Station"},
-  {"name": "radio2", "host": "192.168.1.101", "port": "80", "display_name": "Mobile Unit"},
-  {"name": "radio3", "host": "10.0.0.50", "port": "80", "display_name": "Remote Repeater"}
-]
+RADIOS: |
+  [
+    {"name": "radio1", "host": "192.168.1.100", "port": "80", "display_name": "Home Base Station"},
+    {"name": "radio2", "host": "192.168.1.101", "port": "80", "display_name": "Mobile Unit"},
+    {"name": "radio3", "host": "10.0.0.50", "port": "80", "display_name": "Remote Repeater"}
+  ]
 ```
 
-### Advanced Configuration
-
-#### Performance Tuning
+### Message Filtering
 ```bash
-# Circuit breaker settings
-CIRCUIT_BREAKER_FAILURE_THRESHOLD=5
-CIRCUIT_BREAKER_TIMEOUT=60
-
-# HTTP optimization
-MAX_CONCURRENT_REQUESTS=10
-HTTP_TIMEOUT=5
+# Control which message types are forwarded to Discord
+SHOW_TEXT_MESSAGES=true        # Chat messages between nodes
+SHOW_POSITION_UPDATES=true     # GPS location broadcasts
+SHOW_NODE_INFO=true            # Device information and names
+SHOW_TELEMETRY=true            # Battery, temperature, etc.
+SHOW_ROUTING=false             # Network routing information (usually noisy)
+SHOW_ADMIN=true                # Administrative commands
+SHOW_DETECTION_SENSOR=true     # Motion/presence detection
+SHOW_RANGE_TEST=true           # Signal testing messages
+SHOW_STORE_FORWARD=true        # Delayed message delivery
+SHOW_UNKNOWN=false             # Unrecognized message types
 ```
 
-#### Database Management
-```bash
-# Retention policies
-MESSAGE_RETENTION_HOURS=24
-STATS_RETENTION_DAYS=30
+## Message Format Examples
 
-# Backup settings
-ENABLE_BACKUPS=true
-BACKUP_SCHEDULE="0 2 * * *"  # Daily at 2 AM
-BACKUP_RETENTION=7
+### Text Message
+```
+📻 **Home Base Station (192.168.1.100)** | **Alice (12345678)** | 14:32:15
+💬 Hello from the mesh network!
+📶 SNR: 5.2 | RSSI: -85
 ```
 
-#### Monitoring
-```bash
-# Enable metrics endpoint
-ENABLE_METRICS=true
-METRICS_PORT=8080
-
-# Statistics reporting
-STATS_REPORT_INTERVAL=5  # Minutes
+### Position Update
+```
+📻 **Mobile Repeater (192.168.1.101)** | **Bob's Radio (87654321)** | 09:15:43
+📍 Position update
+📶 SNR: 3.1 | RSSI: -92
 ```
 
-## 📊 Monitoring and Observability
-
-### Built-in Health Checks
-The container includes comprehensive health checks:
-```bash
-# Check container health
-docker ps
-docker inspect meshcord-bot | grep Health -A 10
+### Telemetry Data
+```
+📻 **Remote Cabin (10.0.0.50)** | **Weather Station (abcdef12)** | 16:45:22
+📊 Telemetry data
+📶 SNR: 7.8 | RSSI: -78
 ```
 
-### Prometheus Metrics
-Enable metrics collection:
-```bash
-ENABLE_METRICS=true
-```
-
-Access metrics at `http://localhost:8080/metrics`
-
-### Database Analytics
-```bash
-# Access database directly
-docker exec -it meshcord-bot sqlite3 /app/data/message_tracking.db
-
-# View recent statistics
-SELECT * FROM statistics ORDER BY timestamp DESC LIMIT 10;
-
-# Check node information
-SELECT * FROM nodes WHERE last_seen > strftime('%s', 'now', '-1 day');
-```
-
-### Log Analysis
-```bash
-# Real-time logs
-docker-compose logs -f meshcord
-
-# Structured logging with timestamps
-docker-compose logs --timestamps meshcord
-
-# Filter by log level
-docker-compose logs meshcord | grep ERROR
-```
-
-## 🔧 Development Setup
+## Development Setup
 
 ### Local Development
 ```bash
@@ -222,27 +226,20 @@ source venv/bin/activate  # Linux/macOS
 pip install -r requirements.txt
 pip install -r requirements-test.txt
 
-# Run tests
-pytest tests/ -v --cov=meshcord_bot
-
-# Format code
-black meshcord_bot.py
-isort meshcord_bot.py
-
-# Type checking
-mypy meshcord_bot.py --ignore-missing-imports
+# Run the bot
+python meshcord_bot.py
 ```
 
 ### Testing
 ```bash
-# Unit tests
+# Run all tests
+pytest tests/ -v
+
+# Run unit tests only
 pytest tests/test_meshcord.py -v
 
-# Integration tests
+# Run integration tests only
 pytest tests/integration/ -v
-
-# Coverage report
-pytest tests/ --cov=meshcord_bot --cov-report=html
 ```
 
 ### Docker Development
@@ -251,33 +248,10 @@ pytest tests/ --cov=meshcord_bot --cov-report=html
 docker build -t meshcord:dev .
 
 # Run with development settings
-docker run -it --env-file .env.dev meshcord:dev
+docker run -it --env-file .env meshcord:dev
 ```
 
-## 📈 Message Format Examples
-
-### Text Message
-```
-📻 **Home Base Station (192.168.1.100)** | **Alice (12345678)** | 14:32:15
-💬 Hello from the mesh network!
-📶 SNR: 5.2 | RSSI: -85
-```
-
-### Position Update
-```
-📻 **Mobile Repeater (192.168.1.101)** | **Bob's Radio (87654321)** | 09:15:43
-📍 Position: 34.052235, -118.243685 (Alt: 123m)
-📶 SNR: 3.1 | RSSI: -92
-```
-
-### Telemetry Data
-```
-📻 **Remote Cabin (10.0.0.50)** | **Weather Station (abcdef12)** | 16:45:22
-📊 Batt: 85% | Volt: 4.12V | Chan: 12.3% | Air: 8.7%
-📶 SNR: 7.8 | RSSI: -78
-```
-
-## 🚨 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -319,64 +293,61 @@ docker exec meshcord-bot sqlite3 /app/data/message_tracking.db "VACUUM;"
 Enable comprehensive logging:
 ```bash
 DEBUG_MODE=true
-LOG_LEVEL=DEBUG
 ```
 
-## 📊 Performance Recommendations
+## Connection Method Comparison
 
-### Production Deployment
-- **Serial Connection**: Use for maximum reliability
-- **Polling Interval**: 2-5 seconds for HTTP connections
-- **Resource Limits**: 256MB RAM, 0.5 CPU cores
-- **Monitoring**: Enable Prometheus metrics
-- **Backups**: Configure automatic database backups
+| Method | Reliability | Setup Difficulty | Use Case |
+|--------|-------------|------------------|----------|
+| Serial | 99.9% | Easy | Direct USB connection |
+| HTTP | ~85-90% | Medium | Network/WiFi connection |
 
-### High-Volume Networks
-- **Message Filtering**: Disable noisy message types (routing, unknown)
-- **Retention Policy**: Reduce `MESSAGE_RETENTION_HOURS` for busy networks
-- **Circuit Breaker**: Lower failure threshold for faster recovery
-- **Database**: Consider external database for very high volume
+Serial connection is recommended for maximum reliability as it receives every message in real-time without polling limitations.
 
-## 🤝 Contributing
+If you must use HTTP, optimize with:
+```bash
+POLL_INTERVAL=1.0  # Faster polling
+DEBUG_MODE=true    # Monitor for missed messages
+```
+
+The HTTP API only holds one message at a time, so faster polling helps reduce message loss.
+
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Add tests for new functionality
 5. Ensure all tests pass (`pytest tests/`)
-6. Run code quality checks (`black`, `flake8`, `mypy`)
-7. Commit your changes (`git commit -m 'Add amazing feature'`)
-8. Push to the branch (`git push origin feature/amazing-feature`)
-9. Open a Pull Request
+6. Commit your changes (`git commit -m 'Add amazing feature'`)
+7. Push to the branch (`git push origin feature/amazing-feature`)
+8. Open a Pull Request
 
 ### Development Guidelines
 - Follow PEP 8 style guidelines
-- Add type hints for new functions
-- Write comprehensive tests
+- Add tests for new functions
 - Update documentation for new features
 - Use conventional commit messages
 
-## 📄 License
+## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **Meshtastic Project** - For the amazing mesh networking platform
 - **Discord.py** - For the excellent Discord API library
 - **Contributors** - Everyone who helps improve Meshcord
-- **Community** - For testing, feedback, and feature requests
 
-## 🔗 Related Projects
+## Related Projects
 
 - [Meshtastic](https://meshtastic.org/) - The mesh networking platform
 - [Meshtastic Python](https://github.com/meshtastic/Meshtastic-python) - Python API library
 - [Discord.py](https://github.com/Rapptz/discord.py) - Discord API wrapper
 
-## 📞 Support
+## Support
 
 - **GitHub Issues**: [Report bugs or request features](https://github.com/sargonas/meshcord/issues)
-- **GitHub Discussions**: [Community support and questions](https://github.com/sargonas/meshcord/discussions)
 - **Discord**: [Meshtastic Discord Community](https://discord.gg/ktMAKGBnBs)
 
 ---
