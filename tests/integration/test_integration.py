@@ -6,7 +6,7 @@ import json
 import time
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
+from aiohttp.test_utils import AioHTTPTestCase
 
 # Mock meshtastic imports
 import sys
@@ -86,7 +86,6 @@ class TestMeshcordIntegration(AioHTTPTestCase):
                    'DEBUG_MODE']:
             os.environ.pop(key, None)
 
-    @unittest_run_loop
     async def test_http_connection_and_polling(self):
         """Test that HTTP connection and polling works end-to-end"""
         
@@ -130,7 +129,6 @@ class TestMeshcordIntegration(AioHTTPTestCase):
             finally:
                 await bot.session.close()
 
-    @unittest_run_loop
     async def test_multiple_radio_configuration(self):
         """Test that multiple radios can be configured"""
         
@@ -153,7 +151,6 @@ class TestMeshcordIntegration(AioHTTPTestCase):
                 self.assertEqual(bot.radios[0]['name'], 'Radio1')
                 self.assertEqual(bot.radios[1]['name'], 'Radio2')
 
-    @unittest_run_loop
     async def test_radio_display_names(self):
         """Test that radio display names work correctly"""
         
@@ -180,7 +177,6 @@ class TestMeshcordIntegration(AioHTTPTestCase):
                 # Radio2 should show regular name
                 self.assertEqual(radio2_info, f"radio2 (127.0.0.1)")
 
-    @unittest_run_loop
     async def test_message_deduplication(self):
         """Test that duplicate messages are properly handled"""
         
@@ -205,7 +201,6 @@ class TestMeshcordIntegration(AioHTTPTestCase):
             # Second time should be marked as processed
             self.assertTrue(bot._is_message_processed(message_id, source))
 
-    @unittest_run_loop
     async def test_database_functionality(self):
         """Test that database operations work correctly"""
         
@@ -237,7 +232,6 @@ class TestMeshcordIntegration(AioHTTPTestCase):
             self.assertEqual(result[0], "TestNode")
             self.assertEqual(result[1], "Test Node Long Name")
 
-    @unittest_run_loop
     async def test_error_handling(self):
         """Test that errors are handled gracefully"""
         
