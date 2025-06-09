@@ -4,6 +4,7 @@ import logging
 import os
 import discord
 import aiohttp
+import serial_asyncio
 from datetime import datetime
 import sqlite3
 from typing import Dict, List, Optional
@@ -15,13 +16,20 @@ logger = logging.getLogger(__name__)
 
 class MeshtasticDiscordBot:
     def __init__(self):
+        # Basic config validation
+        self._validate_required_config()
+        
         # Discord configuration
         self.discord_token = os.getenv('DISCORD_BOT_TOKEN')
         self.channel_id = int(os.getenv('DISCORD_CHANNEL_ID'))
         
-        # Radio configuration
+        # Connection method configuration
+        self.connection_method = os.getenv('CONNECTION_METHOD', 'http').lower()
+        self.serial_port = os.getenv('SERIAL_PORT', '/dev/ttyUSB0')
+        
+        # HTTP configuration
         self.radios = self._parse_radios()
-        self.poll_interval = int(os.getenv('POLL_INTERVAL', '2'))  # More frequent polling
+        self.poll_interval = float(os.getenv('POLL_INTERVAL', '2'))
         self.debug_mode = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
         
         # Message filtering
@@ -32,10 +40,26 @@ class MeshtasticDiscordBot:
         intents.message_content = True
         self.client = discord.Client(intents=intents)
         
-        # Initialize database and HTTP session
+        # Initialize database and connections
         self._init_database()
         self._setup_discord_events()
         self.session = None
+        self.serial_reader = None
+        self.serial_writer = None
+        
+        # Serial buffer for improved parsing
+        self.serial_buffer = bytearray()
+        
+    def _validate_required_config(self):
+        """Validate required configuration"""
+        if not os.getenv('DISCORD_BOT_TOKEN'):
+            raise ValueError("DISCORD_BOT_TOKEN is required")
+        if not os.getenv('DISCORD_CHANNEL_ID'):
+            raise ValueError("DISCORD_CHANNEL_ID is required")
+        try:
+            int(os.getenv('DISCORD_CHANNEL_ID'))
+        except ValueError:
+            raise ValueError("DISCORD_CHANNEL_ID must be a valid integer")
         
     def _parse_radios(self) -> List[Dict[str, str]]:
         """Parse radio configuration from environment variables"""
@@ -51,13 +75,18 @@ class MeshtasticDiscordBot:
                 
         # Fallback to single radio
         if not radios:
-            radios = [{
+            radio = {
                 "name": os.getenv('RADIO_NAME', 'Radio'),
                 "host": os.getenv('MESHTASTIC_HOST', 'meshtastic.local'),
                 "port": os.getenv('MESHTASTIC_PORT', '80')
-            }]
+            }
+            # Add display name if configured
+            display_name = os.getenv('RADIO_DISPLAY_NAME')
+            if display_name:
+                radio["display_name"] = display_name
+            radios = [radio]
             
-        logger.info(f"Monitoring {len(radios)} radio(s): {[r['name'] for r in radios]}")
+        logger.info(f"Configured radios: {[r.get('display_name', r['name']) for r in radios]}")
         return radios
         
     def _parse_message_filters(self) -> Dict[str, bool]:
@@ -86,7 +115,7 @@ class MeshtasticDiscordBot:
         return filters
         
     def _init_database(self):
-        """Initialize SQLite database for message tracking and node info"""
+        """Initialize SQLite database for message tracking, node info, and radio info"""
         os.makedirs('data', exist_ok=True)
         self.conn = sqlite3.connect('data/message_tracking.db')
         cursor = self.conn.cursor()
@@ -95,10 +124,10 @@ class MeshtasticDiscordBot:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS processed_messages (
                 message_id TEXT,
-                radio_name TEXT,
+                source TEXT,
                 timestamp INTEGER,
                 processed_at INTEGER,
-                PRIMARY KEY (message_id, radio_name)
+                PRIMARY KEY (message_id, source)
             )
         ''')
         
@@ -109,6 +138,17 @@ class MeshtasticDiscordBot:
                 short_name TEXT,
                 long_name TEXT,
                 last_seen INTEGER
+            )
+        ''')
+        
+        # Radio info table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS radios (
+                source_name TEXT PRIMARY KEY,
+                node_id INTEGER,
+                short_name TEXT,
+                long_name TEXT,
+                last_updated INTEGER
             )
         ''')
         
@@ -124,31 +164,41 @@ class MeshtasticDiscordBot:
         @self.client.event
         async def on_ready():
             logger.info(f'Discord bot logged in as {self.client.user}')
-            self.session = aiohttp.ClientSession()
-            asyncio.create_task(self._monitor_radios())
+            
+            if self.connection_method == 'serial':
+                logger.info(f"Starting serial connection to {self.serial_port}")
+                asyncio.create_task(self._monitor_serial())
+            else:
+                logger.info("Starting HTTP monitoring")
+                self.session = aiohttp.ClientSession()
+                asyncio.create_task(self._request_radio_info_http())
+                asyncio.create_task(self._monitor_radios_http())
                 
         @self.client.event
         async def on_disconnect():
             if self.session:
                 await self.session.close()
+            if self.serial_writer:
+                self.serial_writer.close()
+                await self.serial_writer.wait_closed()
                 
-    def _is_message_processed(self, message_id: str, radio_name: str) -> bool:
+    def _is_message_processed(self, message_id: str, source: str) -> bool:
         """Check if message has been processed"""
         cursor = self.conn.cursor()
         cursor.execute(
-            'SELECT 1 FROM processed_messages WHERE message_id = ? AND radio_name = ?',
-            (message_id, radio_name)
+            'SELECT 1 FROM processed_messages WHERE message_id = ? AND source = ?',
+            (message_id, source)
         )
         return cursor.fetchone() is not None
         
-    def _mark_message_processed(self, message_id: str, radio_name: str, timestamp: int):
+    def _mark_message_processed(self, message_id: str, source: str, timestamp: int):
         """Mark message as processed"""
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO processed_messages 
-            (message_id, radio_name, timestamp, processed_at) 
+            (message_id, source, timestamp, processed_at) 
             VALUES (?, ?, ?, ?)
-        ''', (message_id, radio_name, timestamp, int(datetime.now().timestamp())))
+        ''', (message_id, source, timestamp, int(datetime.now().timestamp())))
         self.conn.commit()
         
     def _get_node_name(self, node_id: int) -> str:
@@ -162,12 +212,10 @@ class MeshtasticDiscordBot:
         
         if result:
             short_name, long_name = result
-            # Prefer short name if available, otherwise long name
             display_name = short_name or long_name
             if display_name:
                 return f"{display_name} ({node_id:08x})"
         
-        # Fallback to just the ID
         return f"{node_id:08x}"
         
     def _update_node_info(self, node_id: int, user_info):
@@ -190,161 +238,297 @@ class MeshtasticDiscordBot:
                 
         except Exception as e:
             logger.error(f"Error updating node info: {e}")
-
-    async def _monitor_radios(self):
-        """Monitor all radios continuously"""
-        logger.info("Starting radio monitoring")
+            
+    def _get_radio_info(self, source: str) -> str:
+        """Get radio identification info from database"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'SELECT node_id, short_name, long_name FROM radios WHERE source_name = ?',
+            (source,)
+        )
+        result = cursor.fetchone()
         
+        if result:
+            node_id, short_name, long_name = result
+            display_name = short_name or long_name or source
+            if node_id:
+                return f"{display_name} ({node_id:08x})"
+            else:
+                return display_name
+        
+        # Fallback: find radio config and show display name
+        for radio in self.radios:
+            if radio['name'] == source:
+                display_name = radio.get('display_name', radio['name'])
+                return f"{display_name} ({radio['host']})"
+        
+        return source
+        
+    def _update_radio_info(self, source: str, my_info):
+        """Update radio information from my_info message"""
+        try:
+            node_id = getattr(my_info, 'my_node_num', None)
+            
+            if node_id:
+                # Find display name from config
+                display_name = source
+                for radio in self.radios:
+                    if radio['name'] == source:
+                        display_name = radio.get('display_name', source)
+                        break
+                
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO radios 
+                    (source_name, node_id, short_name, long_name, last_updated) 
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (source, node_id, display_name, '', int(datetime.now().timestamp())))
+                self.conn.commit()
+                
+                logger.info(f"Updated radio info for {display_name}: node {node_id:08x}")
+                
+        except Exception as e:
+            logger.error(f"Error updating radio info: {e}")
+
+    # SERIAL CONNECTION METHODS
+    async def _monitor_serial(self):
+        """Monitor serial connection with reconnection"""
         while True:
             try:
-                tasks = [self._poll_radio(radio) for radio in self.radios]
+                logger.info(f"Connecting to serial port {self.serial_port}")
+                self.serial_reader, self.serial_writer = await serial_asyncio.open_serial_connection(
+                    url=self.serial_port,
+                    baudrate=115200
+                )
+                
+                logger.info("Serial connection established")
+                await self._request_radio_info_serial()
+                await self._read_serial_stream()
+                
+            except Exception as e:
+                logger.error(f"Serial connection error: {e}")
+                if self.serial_writer:
+                    self.serial_writer.close()
+                    try:
+                        await self.serial_writer.wait_closed()
+                    except:
+                        pass
+                self.serial_reader = None
+                self.serial_writer = None
+                self.serial_buffer.clear()
+                await asyncio.sleep(5)
+
+    async def _request_radio_info_serial(self):
+        """Request radio information via serial"""
+        try:
+            if self.debug_mode:
+                logger.debug("Requesting radio info via serial")
+        except Exception as e:
+            logger.error(f"Error requesting radio info via serial: {e}")
+                
+    async def _read_serial_stream(self):
+        """Read serial stream with improved parsing"""
+        while self.serial_reader and not self.serial_reader.at_eof():
+            try:
+                data = await asyncio.wait_for(self.serial_reader.read(1024), timeout=1.0)
+                if not data:
+                    logger.warning("Serial connection closed")
+                    break
+                    
+                self.serial_buffer.extend(data)
+                await self._process_serial_buffer()
+                
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                logger.error(f"Serial read error: {e}")
+                break
+
+    async def _process_serial_buffer(self):
+        """Process serial buffer with better message detection"""
+        while len(self.serial_buffer) >= 4:
+            found_message = False
+            
+            for start_pos in range(len(self.serial_buffer) - 3):
+                for end_pos in range(start_pos + 4, min(start_pos + 200, len(self.serial_buffer) + 1)):
+                    try:
+                        candidate = bytes(self.serial_buffer[start_pos:end_pos])
+                        from_radio = mesh_pb2.FromRadio()
+                        from_radio.ParseFromString(candidate)
+                        
+                        await self._process_from_radio(from_radio, "serial")
+                        self.serial_buffer = self.serial_buffer[end_pos:]
+                        found_message = True
+                        break
+                        
+                    except Exception:
+                        continue
+                
+                if found_message:
+                    break
+            
+            if not found_message:
+                self.serial_buffer = self.serial_buffer[1:]
+                if len(self.serial_buffer) < 4:
+                    break
+
+    # HTTP CONNECTION METHODS
+    async def _monitor_radios_http(self):
+        """Monitor radios via HTTP - single poll per radio per cycle"""
+        while True:
+            try:
+                tasks = [self._poll_radio_http(radio) for radio in self.radios]
                 await asyncio.gather(*tasks, return_exceptions=True)
                 await asyncio.sleep(self.poll_interval)
+                
             except Exception as e:
-                logger.error(f"Radio monitoring error: {e}")
+                logger.error(f"HTTP monitoring error: {e}")
                 await asyncio.sleep(self.poll_interval)
                 
-    async def _poll_radio(self, radio: Dict[str, str]):
+    async def _poll_radio_http(self, radio: Dict[str, str]):
         """Poll a single radio via HTTP API"""
+        radio_name = radio['name']
+        
         try:
             url = f"http://{radio['host']}:{radio['port']}/api/v1/fromradio"
-            timeout = aiohttp.ClientTimeout(total=10)
+            timeout = aiohttp.ClientTimeout(total=3)
             
             async with self.session.get(url, timeout=timeout) as response:
                 if response.status == 200:
                     data = await response.read()
                     if data:
-                        await self._process_protobuf_data(data, radio['name'])
-                else:
-                    logger.warning(f"HTTP {response.status} from {radio['name']}")
+                        await self._process_protobuf_data(data, radio_name)
+                elif response.status != 503:  # 503 is normal (no data)
+                    if self.debug_mode:
+                        logger.debug(f"HTTP {response.status} from {radio_name}")
                     
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout from {radio['name']} ({radio['host']})")
+            if self.debug_mode:
+                logger.debug(f"Timeout from {radio_name}")
         except Exception as e:
-            logger.error(f"Error polling {radio['name']}: {e}")
+            if self.debug_mode:
+                logger.debug(f"HTTP error from {radio_name}: {e}")
+
+    async def _request_radio_info_http(self):
+        """Request radio information from all HTTP radios"""
+        try:
+            await asyncio.sleep(1)
             
-    async def _process_protobuf_data(self, data: bytes, radio_name: str):
+            for radio in self.radios:
+                try:
+                    url = f"http://{radio['host']}:{radio['port']}/api/v1/nodeinfo"
+                    timeout = aiohttp.ClientTimeout(total=5)
+                    
+                    async with self.session.get(url, timeout=timeout) as response:
+                        if response.status == 200:
+                            data = await response.read()
+                            if data:
+                                await self._process_protobuf_data(data, radio['name'])
+                        
+                except Exception as e:
+                    if self.debug_mode:
+                        logger.debug(f"Could not get nodeinfo from {radio['name']}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error requesting radio info via HTTP: {e}")
+
+    async def _process_protobuf_data(self, data: bytes, source: str):
         """Process protobuf data from HTTP API"""
         try:
-            # Try parsing as FromRadio first
             from_radio = mesh_pb2.FromRadio()
             from_radio.ParseFromString(data)
+            await self._process_from_radio(from_radio, source)
             
-            if from_radio.HasField('packet'):
-                if self.debug_mode:
-                    logger.debug(f"Processing packet from {radio_name}")
-                await self._process_mesh_packet(from_radio.packet, radio_name)
-            elif from_radio.HasField('node_info'):
-                # Update node database when we receive node info
-                node_info = from_radio.node_info
-                if hasattr(node_info, 'num') and hasattr(node_info, 'user'):
-                    self._update_node_info(node_info.num, node_info.user)
-            elif self.debug_mode:
-                logger.debug(f"FromRadio data with no packet or node_info from {radio_name}")
-                
-        except Exception as e1:
-            if self.debug_mode:
-                logger.debug(f"FromRadio parse failed from {radio_name}: {e1}")
-            
-            # Fallback to direct MeshPacket parsing
+        except Exception:
             try:
                 packet = mesh_pb2.MeshPacket()
                 packet.ParseFromString(data)
+                await self._process_mesh_packet(packet, source)
+            except Exception as e:
+                if data and self.debug_mode:
+                    logger.debug(f"Parse error from {source}: {e}")
+
+    async def _process_from_radio(self, from_radio, source: str):
+        """Process a FromRadio protobuf message"""
+        try:
+            if from_radio.HasField('packet'):
+                await self._process_mesh_packet(from_radio.packet, source)
+            elif from_radio.HasField('node_info'):
+                node_info = from_radio.node_info
+                if hasattr(node_info, 'num') and hasattr(node_info, 'user'):
+                    self._update_node_info(node_info.num, node_info.user)
+            elif from_radio.HasField('my_info'):
+                my_info = from_radio.my_info
+                self._update_radio_info(source, my_info)
                 if self.debug_mode:
-                    logger.debug(f"Processing direct MeshPacket from {radio_name}")
-                await self._process_mesh_packet(packet, radio_name)
-            except Exception as e2:
-                if data:  # Only log if there was actual data
-                    logger.warning(f"Could not parse {len(data)} bytes from {radio_name}: {e1}, {e2}")
-                    if self.debug_mode:
-                        # Log first few bytes for debugging
-                        logger.debug(f"Data preview: {data[:50].hex()}")
+                    logger.debug(f"Received radio info from {source}")
+            elif from_radio.HasField('config'):
+                if self.debug_mode:
+                    logger.debug(f"Received config from {source}")
                     
-    async def _process_mesh_packet(self, packet, radio_name: str):
+        except Exception as e:
+            logger.error(f"Error processing FromRadio from {source}: {e}")
+                    
+    async def _process_mesh_packet(self, packet, source: str):
         """Process a MeshPacket"""
         try:
-            # Extract packet info
             from_id = getattr(packet, 'from', None) or getattr(packet, 'from_', None)
             packet_id = getattr(packet, 'id', 0)
             rx_time = getattr(packet, 'rx_time', 0)
             
             if from_id is None:
-                if self.debug_mode:
-                    logger.debug(f"Packet missing 'from' field from {radio_name}")
                 return
                 
             message_id = f"{from_id:08x}_{packet_id}"
             
-            if self.debug_mode:
-                logger.debug(f"Processing packet {message_id} from {radio_name}")
-            
-            # Skip if already processed
-            if self._is_message_processed(message_id, radio_name):
-                if self.debug_mode:
-                    logger.debug(f"Skipping duplicate message {message_id} from {radio_name}")
+            if self._is_message_processed(message_id, source):
                 return
                 
-            # Check if packet is decoded
             if not hasattr(packet, 'decoded') or not packet.decoded:
-                if self.debug_mode:
-                    logger.debug(f"Skipping encrypted/undecoded packet {message_id} from {radio_name}")
                 return
                 
             decoded = packet.decoded
             if not hasattr(decoded, 'portnum'):
-                if self.debug_mode:
-                    logger.debug(f"Packet {message_id} missing portnum from {radio_name}")
                 return
                 
-            if self.debug_mode:
-                logger.debug(f"Packet {message_id} port {decoded.portnum} from {radio_name}")
-                
             # Get signal info
-            snr = getattr(packet, 'rx_snr', 'N/A')
-            rssi = getattr(packet, 'rx_rssi', 'N/A')
+            snr = getattr(packet, 'rx_snr', None)
+            rssi = getattr(packet, 'rx_rssi', None)
             
-            # Process based on port number
-            message_info = self._get_message_info(decoded, from_id, rx_time, radio_name, snr, rssi)
+            snr_str = f"{snr:.1f}" if snr is not None else "N/A"
+            rssi_str = str(rssi) if rssi is not None else "N/A"
+            
+            message_info = self._get_message_info(decoded, from_id, rx_time, source, snr_str, rssi_str)
             
             if message_info:
                 if self._should_process_message_type(message_info['type']):
                     await self._send_to_discord(message_info['content'])
-                    self._mark_message_processed(message_id, radio_name, rx_time)
                     
-                    # Get display name for logging
-                    node_name = self._get_node_name(from_id).split(' (')[0]  # Just the name part
-                    logger.info(f"Forwarded {message_info['type']} from {node_name} via {radio_name}")
-                else:
-                    if self.debug_mode:
-                        logger.debug(f"Message type {message_info['type']} filtered out for {message_id}")
-                    # Still mark as processed to avoid reprocessing
-                    self._mark_message_processed(message_id, radio_name, rx_time)
-            else:
-                if self.debug_mode:
-                    logger.debug(f"No message info extracted for {message_id}")
+                    node_name = self._get_node_name(from_id).split(' (')[0]
+                    radio_info = self._get_radio_info(source).split(' (')[0]
+                    logger.info(f"Forwarded {message_info['type']} from {node_name} via {radio_info}")
+                    
+                self._mark_message_processed(message_id, source, rx_time)
                 
-            # Check if this is a nodeinfo message and extract user info
+            # Extract nodeinfo if present
             if decoded.portnum == portnums_pb2.NODEINFO_APP and hasattr(decoded, 'payload'):
                 try:
                     user_info = mesh_pb2.User()
                     user_info.ParseFromString(decoded.payload)
                     self._update_node_info(from_id, user_info)
-                except Exception as e:
-                    if self.debug_mode:
-                        logger.debug(f"Could not parse nodeinfo payload: {e}")
+                except Exception:
+                    pass
                         
         except Exception as e:
-            logger.error(f"Error processing packet from {radio_name}: {e}")
-            if self.debug_mode:
-                logger.debug(f"Packet attributes: {dir(packet)}")
-                if hasattr(packet, 'decoded'):
-                    logger.debug(f"Decoded attributes: {dir(packet.decoded)}")
+            logger.error(f"Error processing packet from {source}: {e}")
             
-    def _get_message_info(self, decoded, from_id: int, rx_time: int, radio_name: str, snr, rssi) -> Dict:
+    def _get_message_info(self, decoded, from_id: int, rx_time: int, source: str, snr, rssi) -> Dict:
         """Extract message information based on port number"""
         timestamp = datetime.fromtimestamp(rx_time).strftime('%H:%M:%S') if rx_time else 'N/A'
         node_name = self._get_node_name(from_id)
-        base_info = f"📻 **{radio_name}** | **{node_name}** | {timestamp}\n"
+        radio_info = self._get_radio_info(source)
+        
+        base_info = f"📻 **{radio_info}** | **{node_name}** | {timestamp}\n"
         signal_info = f"📶 SNR: {snr} | RSSI: {rssi}"
         
         portnum = decoded.portnum
@@ -425,7 +609,13 @@ class MeshtasticDiscordBot:
         try:
             channel = self.client.get_channel(self.channel_id)
             if channel:
-                await channel.send(message)
+                # Handle Discord's 2000 character limit
+                if len(message) > 2000:
+                    chunks = [message[i:i+1900] for i in range(0, len(message), 1900)]
+                    for chunk in chunks:
+                        await channel.send(chunk)
+                else:
+                    await channel.send(message)
             else:
                 logger.error(f"Discord channel {self.channel_id} not found")
         except Exception as e:
