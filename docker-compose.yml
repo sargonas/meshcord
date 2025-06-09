@@ -1,26 +1,65 @@
 services:
-  meshtastic-discord-bot:
+  meshcord:
     build: .
-    container_name: meshtastic-discord-bot
+    container_name: meshcord-bot
     restart: unless-stopped
+    
+    # Environment variables - REQUIRED: Set these values
     environment:
       # Discord Configuration (REQUIRED)
-      - DISCORD_BOT_TOKEN=your_discord_bot_token_here
-      - DISCORD_CHANNEL_ID=your_discord_channel_id_here
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID}
       
-      # Multiple radios (JSON format)
-      - RADIOS=[
-          {"name": "Home Radio", "host": "192.168.1.100", "port": "80"}, {"name": "Mobile Radio", "host": "meshtastic.local", "port": "80"}
-        ]
+      # Connection Method (choose one)
+      - CONNECTION_METHOD=${CONNECTION_METHOD:-http}  # 'http' or 'serial'
       
-      # Single radio (fallback)
-      # - MESHTASTIC_HOST=192.168.1.100
-      # - MESHTASTIC_PORT=80
-      # - RADIO_NAME=My Radio
+      # HTTP Configuration (if using CONNECTION_METHOD=http)
+      - MESHTASTIC_HOST=${MESHTASTIC_HOST:-meshtastic.local}
+      - MESHTASTIC_PORT=${MESHTASTIC_PORT:-80}
+      - RADIO_NAME=${RADIO_NAME:-Radio}
+      - POLL_INTERVAL=${POLL_INTERVAL:-2}
       
-      # Polling interval in seconds
-      - POLL_INTERVAL=30
+      # Multiple Radios (JSON format, optional)
+      # # Multiple radios (JSON format)
+      #- RADIOS=[
+      #    {"name": "Home Radio", "host": "192.168.1.100", "port": "80"}, {"name": "Mobile Radio", "host": "meshtastic.local", "port": "80"}
+      #  ]
       
+      
+      # Serial Configuration (if using CONNECTION_METHOD=serial)
+      - SERIAL_PORT=${SERIAL_PORT:-/dev/ttyUSB0}
+      
+      # Message Filtering (optional - defaults shown)
+      - SHOW_TEXT_MESSAGES=${SHOW_TEXT_MESSAGES:-true}
+      - SHOW_POSITION_UPDATES=${SHOW_POSITION_UPDATES:-true}
+      - SHOW_NODE_INFO=${SHOW_NODE_INFO:-true}
+      - SHOW_TELEMETRY=${SHOW_TELEMETRY:-true}
+      - SHOW_ROUTING=${SHOW_ROUTING:-false}
+      - SHOW_ADMIN=${SHOW_ADMIN:-true}
+      - SHOW_DETECTION_SENSOR=${SHOW_DETECTION_SENSOR:-true}
+      - SHOW_RANGE_TEST=${SHOW_RANGE_TEST:-true}
+      - SHOW_STORE_FORWARD=${SHOW_STORE_FORWARD:-true}
+      - SHOW_UNKNOWN=${SHOW_UNKNOWN:-false}
+      
+      # Debug mode (optional)
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+    
+    # Volumes for persistent data
     volumes:
-      # Persist message tracking database
-      - ./data:/app/data
+      - meshcord_data:/app/data
+      
+    # Device access for serial connection (uncomment if using serial)
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  meshcord_data:
+    external: true
