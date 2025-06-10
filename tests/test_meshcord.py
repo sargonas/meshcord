@@ -187,6 +187,120 @@ class TestMeshtasticDiscordBot(unittest.TestCase):
         # Routing should not be processed by default
         self.assertFalse(self.bot._should_process_message_type('routing'))
 
+    def test_update_radio_info_with_display_name(self):
+        """Test radio info storage uses display name from config"""
+        # Set up radio with display name
+        self.bot.radios = [
+            {"name": "TestRadio", "host": "test.local", "port": "80", "display_name": "Test Base Station"}
+        ]
+        
+        mock_my_info = Mock()
+        mock_my_info.my_node_num = 0x12345678
+        
+        self.bot._update_radio_info("TestRadio", mock_my_info)
+        
+        # Check that display name was stored in database
+        cursor = self.bot.conn.cursor()
+        cursor.execute('SELECT short_name FROM radios WHERE source_name = ?', ("TestRadio",))
+        result = cursor.fetchone()
+        self.assertEqual(result[0], "Test Base Station")
+
+    def test_get_message_info_with_discord_timestamp(self):
+        """Test message formatting with Discord timestamps"""
+        mock_decoded = Mock()
+        mock_decoded.portnum = 1  # TEXT_MESSAGE_APP
+        mock_decoded.payload = b"Test message"
+        
+        with patch('meshcord_bot.portnums_pb2') as mock_portnums:
+            mock_portnums.TEXT_MESSAGE_APP = 1
+            
+            message_info = self.bot._get_message_info(
+                mock_decoded, 0x12345678, 1640995200, "TestRadio", "5.2", "-85"
+            )
+        
+        self.assertIsNotNone(message_info)
+        self.assertIn('<t:1640995200:t>', message_info['content'])
+        self.assertIn('Test message', message_info['content'])
+
+    def test_get_message_info_no_timestamp(self):
+        """Test message formatting with no timestamp"""
+        mock_decoded = Mock()
+        mock_decoded.portnum = 1
+        mock_decoded.payload = b"Test message"
+        
+        with patch('meshcord_bot.portnums_pb2') as mock_portnums:
+            mock_portnums.TEXT_MESSAGE_APP = 1
+            
+            message_info = self.bot._get_message_info(
+                mock_decoded, 0x12345678, 0, "TestRadio", "5.2", "-85"
+            )
+        
+        self.assertIsNotNone(message_info)
+        self.assertIn('N/A', message_info['content'])
+
+    def test_signal_strength_none_handling(self):
+        """Test handling of None signal strength values"""
+        mock_decoded = Mock()
+        mock_decoded.portnum = 1
+        mock_decoded.payload = b"Test message"
+        
+        with patch('meshcord_bot.portnums_pb2') as mock_portnums:
+            mock_portnums.TEXT_MESSAGE_APP = 1
+            
+            message_info = self.bot._get_message_info(
+                mock_decoded, 0x12345678, 1640995200, "TestRadio", "N/A", "N/A"
+            )
+        
+        self.assertIsNotNone(message_info)
+        self.assertIn('SNR: N/A', message_info['content'])
+        self.assertIn('RSSI: N/A', message_info['content'])
+
+    def test_database_old_message_cleanup(self):
+        """Test that old messages are cleaned up during initialization"""
+        # Manually insert an old message
+        old_timestamp = int(datetime.now().timestamp()) - 90000  # 25 hours ago
+        cursor = self.bot.conn.cursor()
+        cursor.execute('''
+            INSERT INTO processed_messages 
+            (message_id, source, timestamp, processed_at) 
+            VALUES (?, ?, ?, ?)
+        ''', ("old_message", "TestRadio", old_timestamp, old_timestamp))
+        self.bot.conn.commit()
+        
+        # Create a new bot instance (triggers cleanup)
+        with patch('meshcord_bot.discord.Client'):
+            new_bot = MeshtasticDiscordBot()
+            
+            # Old message should be cleaned up
+            cursor = new_bot.conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM processed_messages WHERE message_id = ?', ("old_message",))
+            count = cursor.fetchone()[0]
+            self.assertEqual(count, 0)
+            
+            new_bot.conn.close()
+
+    def test_configuration_validation_missing_channel_id(self):
+        """Test configuration validation with missing channel ID"""
+        with patch.dict(os.environ, {'DISCORD_BOT_TOKEN': 'test'}, clear=True):
+            with self.assertRaises(ValueError) as cm:
+                with patch('meshcord_bot.discord.Client'):
+                    MeshtasticDiscordBot()
+            
+            self.assertIn("DISCORD_CHANNEL_ID is required", str(cm.exception))
+
+    def test_parse_radios_json_decode_error_handling(self):
+        """Test handling of malformed JSON in RADIOS"""
+        with patch.dict(os.environ, {'RADIOS': '{"invalid": json}'}):
+            with patch('meshcord_bot.logger') as mock_logger:
+                with patch('meshcord_bot.discord.Client'):
+                    bot = MeshtasticDiscordBot()
+                    radios = bot._parse_radios()
+            
+                # Should fall back to single radio config
+                self.assertEqual(len(radios), 1)
+                # Should log error
+                mock_logger.error.assert_called_with("Invalid RADIOS JSON format")
+
 
 class TestMeshtasticDiscordBotAsync(unittest.IsolatedAsyncioTestCase):
     """Async tests for MeshtasticDiscordBot"""
@@ -243,6 +357,75 @@ class TestMeshtasticDiscordBotAsync(unittest.IsolatedAsyncioTestCase):
         
         # Should have been called multiple times for chunks
         self.assertGreater(mock_channel.send.call_count, 1)
+
+    async def test_send_to_discord_channel_not_found(self):
+        """Test Discord message sending when channel not found"""
+        self.bot.client = Mock()
+        self.bot.client.get_channel.return_value = None
+        
+        # Should not raise exception
+        await self.bot._send_to_discord("Test message")
+
+    async def test_send_to_discord_exception_handling(self):
+        """Test Discord message sending with exceptions"""
+        mock_channel = AsyncMock()
+        mock_channel.send = AsyncMock(side_effect=Exception("Discord error"))
+        
+        self.bot.client = Mock()
+        self.bot.client.get_channel.return_value = mock_channel
+        
+        # Should not raise exception, just log error
+        await self.bot._send_to_discord("Test message")
+
+    async def test_poll_radio_http_different_status_codes(self):
+        """Test HTTP polling with different response codes"""
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            # Test 503 response (normal - no data)
+            mock_response = AsyncMock()
+            mock_response.status = 503
+            mock_get.return_value.__aenter__.return_value = mock_response
+            
+            self.bot.session = AsyncMock()
+            self.bot.session.get = mock_get
+            
+            radio = {"name": "TestRadio", "host": "test.local", "port": "80"}
+            
+            # Should not raise exception for 503
+            await self.bot._poll_radio_http(radio)
+
+    async def test_process_protobuf_data_parse_errors(self):
+        """Test protobuf parsing with invalid data"""
+        self.bot.debug_mode = True
+        
+        with patch('meshcord_bot.logger') as mock_logger:
+            # Test with invalid protobuf data
+            await self.bot._process_protobuf_data(b'invalid_data', "TestRadio")
+            
+            # Should log debug message about parse error
+            mock_logger.debug.assert_called()
+
+    async def test_process_mesh_packet_missing_fields(self):
+        """Test mesh packet processing with missing fields"""
+        # Test packet with no 'from' field
+        mock_packet = Mock()
+        mock_packet.id = 42
+        # Don't set 'from' field
+        
+        await self.bot._process_mesh_packet(mock_packet, "TestRadio")
+        
+        # Should return early without processing
+
+    async def test_process_mesh_packet_no_decoded_field(self):
+        """Test mesh packet processing without decoded field"""
+        mock_packet = Mock()
+        mock_packet.id = 42
+        setattr(mock_packet, 'from', 0x12345678)
+        mock_packet.rx_time = 1640995200
+        # Don't set decoded field
+        
+        await self.bot._process_mesh_packet(mock_packet, "TestRadio")
+        
+        # Should return early without processing
 
 
 if __name__ == '__main__':
