@@ -524,11 +524,16 @@ class MeshtasticDiscordBot:
             
     def _get_message_info(self, decoded, from_id: int, rx_time: int, source: str, snr, rssi) -> Dict:
         """Extract message information based on port number"""
-        timestamp = datetime.fromtimestamp(rx_time).strftime('%H:%M:%S') if rx_time else 'N/A'
+        # Use Discord timestamp format for user's local timezone
+        if rx_time:
+            discord_timestamp = f"<t:{rx_time}:t>"  # :t shows time only in user's timezone
+        else:
+            discord_timestamp = 'N/A'
+            
         node_name = self._get_node_name(from_id)
         radio_info = self._get_radio_info(source)
         
-        base_info = f"📻 **{radio_info}** | **{node_name}** | {timestamp}\n"
+        base_info = f"📻 **{radio_info}** | **{node_name}** | {discord_timestamp}\n"
         signal_info = f"📶 SNR: {snr} | RSSI: {rssi}"
         
         portnum = decoded.portnum
