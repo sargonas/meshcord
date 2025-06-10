@@ -14,7 +14,8 @@ A reliable Discord bridge for Meshtastic networks that automatically forwards me
 
 ### Smart Message Handling
 - **Real-time Discord integration** - Messages appear instantly in your Discord channel
-- **Signal strength reporting** - Includes SNR and RSSI data
+- **Signal strength reporting** - Optional SNR and RSSI data display
+- **Discord timestamps** - Shows time in each user's local timezone
 - **Duplicate prevention** - Automatic deduplication of repeat messages
 - **Persistent node database** - Remembers node names across restarts
 - **Custom radio names** - Friendly display names for multi-radio setups
@@ -184,27 +185,36 @@ SHOW_DETECTION_SENSOR=true     # Motion/presence detection
 SHOW_RANGE_TEST=true           # Signal testing messages
 SHOW_STORE_FORWARD=true        # Delayed message delivery
 SHOW_UNKNOWN=false             # Unrecognized message types
+
+# Signal strength reporting (optional)
+SHOW_SIGNAL_STRENGTH=true      # Include SNR and RSSI data in messages
 ```
 
 ## Message Format Examples
 
-### Text Message
+### Text Message (with signal strength)
 ```
-📻 **Home Base Station (192.168.1.100)** | **Alice (12345678)** | 14:32:15
+📻 **Home Base Station (192.168.1.100)** | **Alice (12345678)** | <t:1640995200:t>
 💬 Hello from the mesh network!
 📶 SNR: 5.2 | RSSI: -85
 ```
 
+### Text Message (without signal strength)
+```
+📻 **Home Base Station (192.168.1.100)** | **Alice (12345678)** | <t:1640995200:t>
+💬 Hello from the mesh network!
+```
+
 ### Position Update
 ```
-📻 **Mobile Repeater (192.168.1.101)** | **Bob's Radio (87654321)** | 09:15:43
+📻 **Mobile Repeater (192.168.1.101)** | **Bob's Radio (87654321)** | <t:1640995300:t>
 📍 Position update
 📶 SNR: 3.1 | RSSI: -92
 ```
 
 ### Telemetry Data
 ```
-📻 **Remote Cabin (10.0.0.50)** | **Weather Station (abcdef12)** | 16:45:22
+📻 **Remote Cabin (10.0.0.50)** | **Weather Station (abcdef12)** | <t:1640995400:t>
 📊 Telemetry data
 📶 SNR: 7.8 | RSSI: -78
 ```

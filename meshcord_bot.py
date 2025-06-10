@@ -35,6 +35,9 @@ class MeshtasticDiscordBot:
         # Message filtering
         self.message_filters = self._parse_message_filters()
         
+        # Signal strength reporting
+        self.show_signal_strength = os.getenv('SHOW_SIGNAL_STRENGTH', 'true').lower() in ['true', '1', 'yes', 'on']
+        
         # Discord client setup
         intents = discord.Intents.default()
         intents.message_content = True
@@ -534,7 +537,11 @@ class MeshtasticDiscordBot:
         radio_info = self._get_radio_info(source)
         
         base_info = f"📻 **{radio_info}** | **{node_name}** | {discord_timestamp}\n"
-        signal_info = f"📶 SNR: {snr} | RSSI: {rssi}"
+        
+        if self.show_signal_strength:
+            signal_info = f"📶 SNR: {snr} | RSSI: {rssi}"
+        else:
+            signal_info = ""
         
         portnum = decoded.portnum
         
@@ -542,65 +549,95 @@ class MeshtasticDiscordBot:
             try:
                 text = decoded.payload.decode('utf-8', errors='ignore').strip()
                 if text:
+                    content = f"{base_info}💬 {text}"
+                    if signal_info:
+                        content += f"\n{signal_info}"
                     return {
                         'type': 'text_messages',
-                        'content': f"{base_info}💬 {text}\n{signal_info}"
+                        'content': content
                     }
             except:
                 pass
                 
         elif portnum == portnums_pb2.POSITION_APP:
+            content = f"{base_info}📍 Position update"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'position_updates',
-                'content': f"{base_info}📍 Position update\n{signal_info}"
+                'content': content
             }
             
         elif portnum == portnums_pb2.NODEINFO_APP:
+            content = f"{base_info}ℹ️ Node info update"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'node_info',
-                'content': f"{base_info}ℹ️ Node info update\n{signal_info}"
+                'content': content
             }
             
         elif portnum == portnums_pb2.TELEMETRY_APP:
+            content = f"{base_info}📊 Telemetry data"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'telemetry',
-                'content': f"{base_info}📊 Telemetry data\n{signal_info}"
+                'content': content
             }
             
         elif portnum == portnums_pb2.ROUTING_APP:
+            content = f"{base_info}🔄 Routing message"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'routing',
-                'content': f"{base_info}🔄 Routing message\n{signal_info}"
+                'content': content
             }
             
         elif portnum == portnums_pb2.ADMIN_APP:
+            content = f"{base_info}⚙️ Admin message"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'admin',
-                'content': f"{base_info}⚙️ Admin message\n{signal_info}"
+                'content': content
             }
             
         elif portnum == portnums_pb2.DETECTION_SENSOR_APP:
+            content = f"{base_info}🚨 Detection sensor"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'detection_sensor',
-                'content': f"{base_info}🚨 Detection sensor\n{signal_info}"
+                'content': content
             }
             
         elif portnum == portnums_pb2.RANGE_TEST_APP:
+            content = f"{base_info}📏 Range test"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'range_test',
-                'content': f"{base_info}📏 Range test\n{signal_info}"
+                'content': content
             }
             
         elif portnum == portnums_pb2.STORE_FORWARD_APP:
+            content = f"{base_info}💾 Store & Forward"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'store_forward',
-                'content': f"{base_info}💾 Store & Forward\n{signal_info}"
+                'content': content
             }
             
         else:
+            content = f"{base_info}❓ Unknown message (port {portnum})"
+            if signal_info:
+                content += f"\n{signal_info}"
             return {
                 'type': 'unknown',
-                'content': f"{base_info}❓ Unknown message (port {portnum})\n{signal_info}"
+                'content': content
             }
             
         return None

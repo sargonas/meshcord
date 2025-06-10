@@ -42,6 +42,9 @@ services:
       SHOW_STORE_FORWARD: ${SHOW_STORE_FORWARD:-true}
       SHOW_UNKNOWN: ${SHOW_UNKNOWN:-false}
       
+      # Signal strength reporting (optional)
+      SHOW_SIGNAL_STRENGTH: ${SHOW_SIGNAL_STRENGTH:-true}
+      
       # Debug mode (optional)
       DEBUG_MODE: ${DEBUG_MODE:-false}
     
