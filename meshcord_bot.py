@@ -9,6 +9,8 @@ from datetime import datetime
 import sqlite3
 from typing import Dict, List, Optional
 from meshtastic import mesh_pb2, portnums_pb2
+import time
+import concurrent.futures
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -49,6 +51,10 @@ class MeshtasticDiscordBot:
         self.session = None
         self.serial_reader = None
         self.serial_writer = None
+        
+        # Serial interface and threading
+        self.meshtastic_interface = None
+        self.packet_queue = asyncio.Queue()
         
         # Serial buffer for improved parsing
         self.serial_buffer = bytearray()
@@ -171,6 +177,7 @@ class MeshtasticDiscordBot:
             if self.connection_method == 'serial':
                 logger.info(f"Starting serial connection to {self.serial_port}")
                 asyncio.create_task(self._monitor_serial())
+                asyncio.create_task(self._process_packet_queue())
             else:
                 logger.info("Starting HTTP monitoring")
                 self.session = aiohttp.ClientSession()
@@ -184,6 +191,11 @@ class MeshtasticDiscordBot:
             if self.serial_writer:
                 self.serial_writer.close()
                 await self.serial_writer.wait_closed()
+            if self.meshtastic_interface:
+                try:
+                    self.meshtastic_interface.close()
+                except:
+                    pass
                 
     def _is_message_processed(self, message_id: str, source: str) -> bool:
         """Check if message has been processed"""
@@ -293,95 +305,107 @@ class MeshtasticDiscordBot:
         except Exception as e:
             logger.error(f"Error updating radio info: {e}")
 
-    # SERIAL CONNECTION METHODS
+    # SERIAL CONNECTION METHODS - Added functionality
     async def _monitor_serial(self):
-        """Monitor serial connection with reconnection"""
+        """Monitor serial connection using Meshtastic Python library"""
         while True:
             try:
-                logger.info(f"Connecting to serial port {self.serial_port}")
-                self.serial_reader, self.serial_writer = await serial_asyncio.open_serial_connection(
-                    url=self.serial_port,
-                    baudrate=115200
-                )
+                logger.info(f"Connecting to Meshtastic device on {self.serial_port}")
+                from meshtastic.serial_interface import SerialInterface
                 
-                logger.info("Serial connection established")
-                await self._request_radio_info_serial()
-                await self._read_serial_stream()
+                self.loop = asyncio.get_event_loop()
+                
+                def create_interface():
+                    try:
+                        interface = SerialInterface(self.serial_port)
+                        original_handle_packet = interface._handlePacketFromRadio
+                        
+                        def packet_handler_wrapper(packet):
+                            try:
+                                self._packet_callback(packet, interface)
+                                return original_handle_packet(packet)
+                            except Exception as e:
+                                logger.error(f"Error in packet handler wrapper: {e}")
+                                return original_handle_packet(packet)
+                        
+                        interface._handlePacketFromRadio = packet_handler_wrapper
+                        logger.info("Meshtastic serial interface created with packet interception")
+                        return interface
+                    except Exception as e:
+                        logger.error(f"Error creating Meshtastic interface: {e}")
+                        return None
+                
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    self.meshtastic_interface = await self.loop.run_in_executor(executor, create_interface)
+                
+                if not self.meshtastic_interface:
+                    logger.error("Failed to create Meshtastic interface")
+                    await asyncio.sleep(10)
+                    continue
+                
+                logger.info("Meshtastic serial interface established")
+                
+                # Keep connection alive
+                while True:
+                    await asyncio.sleep(60)
+                    logger.info(f"Serial heartbeat: {self.packet_queue.qsize()} packets in queue")
                 
             except Exception as e:
                 logger.error(f"Serial connection error: {e}")
-                if self.serial_writer:
-                    self.serial_writer.close()
+                if self.meshtastic_interface:
                     try:
-                        await self.serial_writer.wait_closed()
+                        self.meshtastic_interface.close()
                     except:
                         pass
-                self.serial_reader = None
-                self.serial_writer = None
-                self.serial_buffer.clear()
-                await asyncio.sleep(5)
+                    self.meshtastic_interface = None
+                await asyncio.sleep(10)
 
-    async def _request_radio_info_serial(self):
-        """Request radio information via serial"""
+    def _packet_callback(self, packet, interface):
+        """Callback for received packets"""
         try:
-            if self.debug_mode:
-                logger.debug("Requesting radio info via serial")
+            if hasattr(self, 'loop') and self.loop:
+                self.loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(self._queue_packet(packet))
+                )
         except Exception as e:
-            logger.error(f"Error requesting radio info via serial: {e}")
-                
-    async def _read_serial_stream(self):
-        """Read serial stream with improved parsing"""
-        while self.serial_reader and not self.serial_reader.at_eof():
-            try:
-                data = await asyncio.wait_for(self.serial_reader.read(1024), timeout=1.0)
-                if not data:
-                    logger.warning("Serial connection closed")
-                    break
-                    
-                self.serial_buffer.extend(data)
-                await self._process_serial_buffer()
-                
-            except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                logger.error(f"Serial read error: {e}")
-                break
-
-    async def _process_serial_buffer(self):
-        """Process serial buffer with better message detection"""
-        while len(self.serial_buffer) >= 4:
-            found_message = False
-            
-            for start_pos in range(len(self.serial_buffer) - 3):
-                for end_pos in range(start_pos + 4, min(start_pos + 200, len(self.serial_buffer) + 1)):
-                    try:
-                        candidate = bytes(self.serial_buffer[start_pos:end_pos])
-                        from_radio = mesh_pb2.FromRadio()
-                        from_radio.ParseFromString(candidate)
-                        
-                        await self._process_from_radio(from_radio, "serial")
-                        self.serial_buffer = self.serial_buffer[end_pos:]
-                        found_message = True
-                        break
-                        
-                    except Exception:
-                        continue
-                
-                if found_message:
-                    break
-            
-            if not found_message:
-                self.serial_buffer = self.serial_buffer[1:]
-                if len(self.serial_buffer) < 4:
-                    break
-
-    # HTTP CONNECTION METHODS
-    async def _monitor_radios_http(self):
-        """Monitor radios via HTTP - single poll per radio per cycle"""
+            logger.error(f"Error in packet callback: {e}")
+    
+    async def _queue_packet(self, packet):
+        """Queue packet for processing"""
+        try:
+            await self.packet_queue.put(('serial', packet))
+        except Exception as e:
+            logger.error(f"Error queuing packet: {e}")
+    
+    async def _process_packet_queue(self):
+        """Process packets from the queue"""
+        logger.info("Starting packet queue processor")
         while True:
             try:
+                source, packet = await self.packet_queue.get()
+                await self._process_mesh_packet(packet, source)
+                self.packet_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error processing packet queue: {e}")
+                await asyncio.sleep(1)
+
+    # HTTP CONNECTION METHODS - Original functionality preserved
+    async def _monitor_radios_http(self):
+        """Monitor radios via HTTP - single poll per radio per cycle"""
+        poll_count = 0
+        
+        while True:
+            try:
+                # Recreate session every hour to prevent stale connections
+                if poll_count % (3600 / self.poll_interval) == 0 and poll_count > 0:
+                    logger.info("Recreating HTTP session to prevent stale connections")
+                    await self.session.close()
+                    self.session = aiohttp.ClientSession()
+                
                 tasks = [self._poll_radio_http(radio) for radio in self.radios]
                 await asyncio.gather(*tasks, return_exceptions=True)
+                
+                poll_count += 1
                 await asyncio.sleep(self.poll_interval)
                 
             except Exception as e:
@@ -396,21 +420,30 @@ class MeshtasticDiscordBot:
             url = f"http://{radio['host']}:{radio['port']}/api/v1/fromradio"
             timeout = aiohttp.ClientTimeout(total=3)
             
+            if self.debug_mode:
+                logger.debug(f"Polling {radio_name} at {url}")
+            
             async with self.session.get(url, timeout=timeout) as response:
                 if response.status == 200:
                     data = await response.read()
                     if data:
+                        if self.debug_mode:
+                            logger.debug(f"Received {len(data)} bytes from {radio_name}")
                         await self._process_protobuf_data(data, radio_name)
-                elif response.status != 503:  # 503 is normal (no data)
+                    else:
+                        if self.debug_mode:
+                            logger.debug(f"No data from {radio_name}")
+                elif response.status == 503:
+                    # 503 is normal (no data available)
                     if self.debug_mode:
-                        logger.debug(f"HTTP {response.status} from {radio_name}")
+                        logger.debug(f"No messages available from {radio_name} (503)")
+                else:
+                    logger.warning(f"HTTP {response.status} from {radio_name}")
                     
         except asyncio.TimeoutError:
-            if self.debug_mode:
-                logger.debug(f"Timeout from {radio_name}")
+            logger.warning(f"Timeout polling {radio_name}")
         except Exception as e:
-            if self.debug_mode:
-                logger.debug(f"HTTP error from {radio_name}: {e}")
+            logger.warning(f"HTTP error from {radio_name}: {e}")
 
     async def _request_radio_info_http(self):
         """Request radio information from all HTTP radios"""

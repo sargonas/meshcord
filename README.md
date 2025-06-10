@@ -2,14 +2,16 @@
 
 [![Tests](https://github.com/sargonas/meshcord/actions/workflows/ci.yml/badge.svg)](https://github.com/sargonas/meshcord/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-
-A reliable Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay connected to your mesh network even when you're away from your radio!
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
+[![Docker Image](https://img.shields.io/docker/image-size/sargonas/meshcord/latest?label=Docker%20Image)](https://hub.docker.com/r/sargonas/meshcord)
+[![Docker Pulls](https://img.shields.io/docker/pulls/sargonas/meshcord)](https://hub.docker.com/r/sargonas/meshcord)
+A Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay connected to your mesh network even when you're away from your radio!
 
 ## Features
 
 ### Dual Connection Methods
-- **Serial Connection** (Recommended): 99.9% message reliability with direct USB connection
-- **HTTP API Connection**: Network-based connection for WiFi-enabled radios
+- **HTTP API Connection** (Default): Network-based connection for WiFi-enabled radios
+- **Serial Connection**: Direct USB connection for maximum reliability
 - **Multi-Radio Support**: Monitor multiple Meshtastic devices simultaneously
 
 ### Smart Message Handling
@@ -48,7 +50,7 @@ A reliable Discord bridge for Meshtastic networks that automatically forwards me
 ## Quick Start
 
 ### Prerequisites
-- Docker and Docker Compose
+- Docker and Docker Compose (recommended) OR Python 3.8+
 - Discord bot token and channel ID
 - Meshtastic device with network access or USB connection
 
@@ -72,9 +74,9 @@ Edit `.env` with your settings:
 DISCORD_BOT_TOKEN=your_bot_token_here
 DISCORD_CHANNEL_ID=your_channel_id_here
 
-# Connection method
+# Connection method (http is default)
 CONNECTION_METHOD=http  # or 'serial'
-MESHTASTIC_HOST=192.168.1.100  # Your radio's IP
+MESHTASTIC_HOST=192.168.1.100  # Your radio's IP (for HTTP mode)
 ```
 
 ### 4. Deploy
@@ -95,12 +97,26 @@ docker run -d \
   -v meshcord_data:/app/data \
   ghcr.io/sargonas/meshcord:latest
 
+# For serial connection, add device mapping:
+docker run -d \
+  --name meshcord-bot \
+  --restart unless-stopped \
+  --device=/dev/ttyUSB0:/dev/ttyUSB0 \
+  -e DISCORD_BOT_TOKEN=your_bot_token_here \
+  -e DISCORD_CHANNEL_ID=your_channel_id_here \
+  -e CONNECTION_METHOD=serial \
+  -e SERIAL_PORT=/dev/ttyUSB0 \
+  -v meshcord_data:/app/data \
+  ghcr.io/sargonas/meshcord:latest
+
 # Check logs
 docker logs -f meshcord-bot
 ```
 
 #### Option B: Using Docker Compose with Pre-built Image
 Create a simple `docker-compose.yml`:
+
+**For HTTP Connection:**
 ```yaml
 services:
   meshcord:
@@ -115,6 +131,28 @@ services:
       MESHTASTIC_PORT: ${MESHTASTIC_PORT:-80}
       RADIO_NAME: ${RADIO_NAME:-Radio}
       POLL_INTERVAL: ${POLL_INTERVAL:-2.0}
+      DEBUG_MODE: ${DEBUG_MODE:-false}
+    volumes:
+      - meshcord_data:/app/data
+
+volumes:
+  meshcord_data:
+```
+
+**For Serial Connection:**
+```yaml
+services:
+  meshcord:
+    image: ghcr.io/sargonas/meshcord:latest
+    container_name: meshcord-bot
+    restart: unless-stopped
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"  # Map your USB device
+    environment:
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID}
+      CONNECTION_METHOD: serial
+      SERIAL_PORT: /dev/ttyUSB0
       DEBUG_MODE: ${DEBUG_MODE:-false}
     volumes:
       - meshcord_data:/app/data
@@ -145,14 +183,7 @@ docker-compose logs -f meshcord
 
 ### Connection Methods
 
-#### Serial Connection (Recommended)
-```bash
-CONNECTION_METHOD=serial
-SERIAL_PORT=/dev/ttyUSB0  # Linux/macOS
-# SERIAL_PORT=COM3        # Windows
-```
-
-#### HTTP Connection
+#### HTTP Connection (Default)
 ```bash
 CONNECTION_METHOD=http
 MESHTASTIC_HOST=192.168.1.100
@@ -162,7 +193,19 @@ RADIO_DISPLAY_NAME="Home Base Station"  # Optional: Custom name for Discord
 POLL_INTERVAL=2.0  # Seconds between polls
 ```
 
-#### Multiple Radio Monitoring
+#### Serial Connection
+```bash
+CONNECTION_METHOD=serial
+SERIAL_PORT=/dev/ttyUSB0  # Linux/macOS
+# SERIAL_PORT=COM3        # Windows (when running natively)
+```
+
+**Serial Connection Requirements:**
+- Direct USB connection to Meshtastic device
+- Proper device permissions (see troubleshooting section)
+- Meshtastic Python library installed (`pip install meshtastic`)
+
+#### Multiple Radio Monitoring (HTTP Only)
 ```bash
 RADIOS: |
   [
@@ -243,13 +286,17 @@ python meshcord_bot.py
 ### Testing
 ```bash
 # Run all tests
-pytest tests/ -v
+python -m pytest tests/ -v
 
 # Run unit tests only
-pytest tests/test_meshcord.py -v
+python -m pytest tests/test_meshcord.py -v
 
 # Run integration tests only
-pytest tests/integration/ -v
+python -m pytest tests/test_integration.py -v
+
+# Run with coverage
+python -m coverage run -m pytest tests/
+python -m coverage report
 ```
 
 ### Docker Development
@@ -272,18 +319,58 @@ docker run -it --env-file .env meshcord:dev
 4. **Message Filtering**: Verify enabled message types in configuration
 
 #### Serial Connection Problems
+
+**Device Permission Issues:**
 ```bash
-# Check device permissions
+# Check device permissions (Linux/macOS)
 ls -la /dev/tty*
+
+# Add user to dialout group (Linux)
 sudo usermod -a -G dialout $USER
+# Log out and log back in
+
+# For macOS, you might need:
+sudo dseditgroup -o edit -a $USER -t user wheel
 
 # Verify device path
-dmesg | grep tty
+dmesg | grep tty  # Linux
+system_profiler SPUSBDataType | grep -A 5 -B 5 "Meshtastic"  # macOS
+```
+
+**Docker Serial Connection:**
+```bash
+# Ensure device is mapped correctly
+docker run --device=/dev/ttyUSB0:/dev/ttyUSB0 ...
+
+# Check if device exists in container
+docker exec meshcord-bot ls -la /dev/tty*
+
+# For Docker Compose, ensure devices section is correct:
+devices:
+  - "/dev/ttyUSB0:/dev/ttyUSB0"
+```
+
+**Serial Port Detection:**
+```bash
+# Find available serial ports
+python -c "import serial.tools.list_ports; print([port.device for port in serial.tools.list_ports.comports()])"
+
+# Test Meshtastic connection
+meshtastic --port /dev/ttyUSB0 --info
+```
+
+#### HTTP Connection Problems
+```bash
+# Test radio connectivity
+curl http://192.168.1.100/api/v1/fromradio
+
+# Check radio web interface
+# Navigate to http://192.168.1.100 in browser
 ```
 
 #### High CPU Usage
 ```bash
-# Check polling interval
+# Check polling interval (HTTP mode only)
 echo $POLL_INTERVAL  # Should be ≥ 1.0 for production
 
 # Monitor resource usage
@@ -305,22 +392,44 @@ Enable comprehensive logging:
 DEBUG_MODE=true
 ```
 
+### Connection Method Decision Guide
+
+**Choose Serial When:**
+- You have direct USB access to the Meshtastic device
+- Maximum reliability is required
+- You want real-time message delivery
+- Device doesn't have WiFi or network connectivity
+
+**Choose HTTP When:**
+- Device is network-connected but not locally accessible via USB
+- You want to monitor multiple radios simultaneously
+- Device is in a remote location
+- You're running Meshcord on a different machine than the radio
+
 ## Connection Method Comparison
 
-| Method | Reliability | Setup Difficulty | Use Case |
-|--------|-------------|------------------|----------|
-| Serial | 99.9% | Easy | Direct USB connection |
-| HTTP | ~85-90% | Medium | Network/WiFi connection |
+| Method | Reliability | Setup Difficulty | Multi-Radio | Use Case |
+|--------|-------------|------------------|-------------|----------|
+| Serial | ~99% | Easy | No | Direct USB connection |
+| HTTP | ~85-90% | Medium | Yes | Network/WiFi connection |
 
-Serial connection is recommended for maximum reliability as it receives every message in real-time without polling limitations.
+**Serial Connection Notes:**
+- Uses the Meshtastic Python library for direct device communication
+- Receives packets in real-time as they arrive
+- Requires physical USB connection to the device
+- Single radio per instance
+
+**HTTP Connection Notes:**
+- Polls the device's web API for new messages
+- API only holds one message at a time, so some messages may be missed with slow polling
+- Can monitor multiple radios from one instance
+- Works over network/WiFi connections
 
 If you must use HTTP, optimize with:
 ```bash
-POLL_INTERVAL=1.0  # Faster polling
+POLL_INTERVAL=1.0  # Faster polling (minimum recommended)
 DEBUG_MODE=true    # Monitor for missed messages
 ```
-
-The HTTP API only holds one message at a time, so faster polling helps reduce message loss.
 
 ## Contributing
 
@@ -328,7 +437,7 @@ The HTTP API only holds one message at a time, so faster polling helps reduce me
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Add tests for new functionality
-5. Ensure all tests pass (`pytest tests/`)
+5. Ensure all tests pass (`python -m pytest tests/`)
 6. Commit your changes (`git commit -m 'Add amazing feature'`)
 7. Push to the branch (`git push origin feature/amazing-feature`)
 8. Open a Pull Request

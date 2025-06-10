@@ -13,6 +13,7 @@ import sys
 sys.modules['meshtastic'] = MagicMock()
 sys.modules['meshtastic.mesh_pb2'] = MagicMock()
 sys.modules['meshtastic.portnums_pb2'] = MagicMock()
+sys.modules['meshtastic.serial_interface'] = MagicMock()
 
 from meshcord_bot import MeshtasticDiscordBot
 
@@ -83,7 +84,7 @@ class TestMeshcordIntegration(AioHTTPTestCase):
         # Clean up environment
         for key in ['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID', 'CONNECTION_METHOD',
                    'MESHTASTIC_HOST', 'MESHTASTIC_PORT', 'RADIO_NAME', 'POLL_INTERVAL',
-                   'DEBUG_MODE']:
+                   'DEBUG_MODE', 'SERIAL_PORT']:
             os.environ.pop(key, None)
 
     async def test_http_connection_and_polling(self):
@@ -260,6 +261,67 @@ class TestMeshcordIntegration(AioHTTPTestCase):
                 
             finally:
                 await bot.session.close()
+
+    async def test_serial_connection_integration(self):
+        """Test serial connection integration end-to-end"""
+        
+        # Set up serial mode environment
+        with patch.dict(os.environ, {
+            'CONNECTION_METHOD': 'serial',
+            'SERIAL_PORT': '/dev/ttyUSB0'
+        }):
+            mock_discord_client = Mock()
+            mock_channel = AsyncMock()
+            mock_discord_client.get_channel.return_value = mock_channel
+            
+            with patch('meshcord_bot.discord.Client') as MockDiscordClient:
+                MockDiscordClient.return_value = mock_discord_client
+                
+                bot = MeshtasticDiscordBot()
+                bot.client = mock_discord_client
+                
+                # Verify serial configuration
+                self.assertEqual(bot.connection_method, 'serial')
+                self.assertEqual(bot.serial_port, '/dev/ttyUSB0')
+                
+                # Test packet processing pipeline
+                mock_packet = Mock()
+                setattr(mock_packet, 'from', 0x12345678)
+                mock_packet.id = 42
+                mock_packet.rx_time = int(time.time())
+                mock_packet.decoded = Mock()
+                mock_packet.decoded.portnum = 1  # TEXT_MESSAGE_APP
+                mock_packet.decoded.payload = b"Integration test message"
+                mock_packet.rx_snr = 5.2
+                mock_packet.rx_rssi = -85
+                
+                # Mock the portnum constants
+                with patch('meshcord_bot.portnums_pb2') as mock_portnums:
+                    mock_portnums.TEXT_MESSAGE_APP = 1
+                    mock_portnums.NODEINFO_APP = 4
+                    
+                    # Test the complete packet processing pipeline
+                    await bot._queue_packet(mock_packet)
+                    
+                    # Verify packet was queued
+                    self.assertEqual(bot.packet_queue.qsize(), 1)
+                    
+                    # Process the packet
+                    source, packet = await bot.packet_queue.get()
+                    self.assertEqual(source, 'serial')
+                    self.assertEqual(packet, mock_packet)
+                    
+                    # Process through the mesh packet handler
+                    with patch.object(bot, '_send_to_discord', new_callable=AsyncMock) as mock_send:
+                        await bot._process_mesh_packet(packet, source)
+                        
+                        # Verify message was formatted and sent to Discord
+                        mock_send.assert_called_once()
+                        call_args = mock_send.call_args[0][0]
+                        self.assertIn('Integration test message', call_args)
+                        self.assertIn('12345678', call_args)  # Node ID
+                        self.assertIn('📻', call_args)  # Radio icon
+                        self.assertIn('💬', call_args)  # Text message icon
 
 
 if __name__ == '__main__':
