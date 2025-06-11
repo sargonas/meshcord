@@ -2,10 +2,8 @@
 
 [![Tests](https://github.com/sargonas/meshcord/actions/workflows/ci.yml/badge.svg)](https://github.com/sargonas/meshcord/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Docker Image](https://img.shields.io/docker/image-size/sargonas/meshcord/latest?label=Docker%20Image)](https://hub.docker.com/r/sargonas/meshcord)
-[![Docker Pulls](https://img.shields.io/docker/pulls/sargonas/meshcord)](https://hub.docker.com/r/sargonas/meshcord)
-A Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay connected to your mesh network even when you're away from your radio!
+
+A reliable Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay connected to your mesh network even when you're away from your radio!
 
 ## Features
 
@@ -410,7 +408,7 @@ DEBUG_MODE=true
 
 | Method | Reliability | Setup Difficulty | Multi-Radio | Use Case |
 |--------|-------------|------------------|-------------|----------|
-| Serial | ~99% | Easy | No | Direct USB connection |
+| Serial | ~99%* | Easy | No | Direct USB connection |
 | HTTP | ~85-90% | Medium | Yes | Network/WiFi connection |
 
 **Serial Connection Notes:**
@@ -418,12 +416,15 @@ DEBUG_MODE=true
 - Receives packets in real-time as they arrive
 - Requires physical USB connection to the device
 - Single radio per instance
+- **Built-in resilience**: Automatic error recovery and connection health monitoring
 
 **HTTP Connection Notes:**
 - Polls the device's web API for new messages
 - API only holds one message at a time, so some messages may be missed with slow polling
 - Can monitor multiple radios from one instance
 - Works over network/WiFi connections
+
+*\*Serial reliability note: While the underlying serial connection can experience occasional data corruption and protocol errors (common with USB/serial communications), Meshcord includes robust error handling that automatically recovers from these issues. You may see occasional parsing errors in the logs, but these are safely handled and do not affect message forwarding.*
 
 If you must use HTTP, optimize with:
 ```bash
@@ -441,12 +442,6 @@ DEBUG_MODE=true    # Monitor for missed messages
 6. Commit your changes (`git commit -m 'Add amazing feature'`)
 7. Push to the branch (`git push origin feature/amazing-feature`)
 8. Open a Pull Request
-
-### Development Guidelines
-- Follow PEP 8 style guidelines
-- Add tests for new functions
-- Update documentation for new features
-- Use conventional commit messages
 
 ## License
 
