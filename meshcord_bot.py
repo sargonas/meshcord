@@ -4,8 +4,7 @@ import logging
 import os
 import discord
 import aiohttp
-import serial_asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 import sqlite3
 from typing import Dict, List, Optional
 from meshtastic import mesh_pb2, portnums_pb2
@@ -48,22 +47,19 @@ class MeshtasticDiscordBot:
         # Initialize database and connections
         self._init_database()
         self._setup_discord_events()
-        self.session = None
-        self.serial_reader = None
-        self.serial_writer = None
         
-        # Serial interface and threading
+        # HTTP session
+        self.session = None
+        
+        # Serial interface and packet processing
         self.meshtastic_interface = None
         self.packet_queue = asyncio.Queue()
         
-        # Serial buffer for improved parsing
-        self.serial_buffer = bytearray()
-        
         # Connection health monitoring
         self.last_packet_time = None
-        self.connection_timeout = 300  # 5 minutes without packets = reconnect
-        self.max_reconnect_attempts = 5
-        self.reconnect_delay = 30  # seconds between reconnect attempts
+        self.connection_timeout = int(os.getenv('CONNECTION_TIMEOUT', '300'))  # 5 minutes
+        self.max_reconnect_attempts = int(os.getenv('MAX_RECONNECT_ATTEMPTS', '5'))
+        self.reconnect_delay = int(os.getenv('RECONNECT_DELAY', '30'))  # seconds
         
     def _validate_required_config(self):
         """Validate required configuration"""
@@ -195,15 +191,13 @@ class MeshtasticDiscordBot:
         async def on_disconnect():
             if self.session:
                 await self.session.close()
-            if self.serial_writer:
-                self.serial_writer.close()
-                await self.serial_writer.wait_closed()
             if self.meshtastic_interface:
                 try:
                     self.meshtastic_interface.close()
                 except:
                     pass
                 
+    # DATABASE METHODS
     def _is_message_processed(self, message_id: str, source: str) -> bool:
         """Check if message has been processed"""
         cursor = self.conn.cursor()
@@ -312,7 +306,7 @@ class MeshtasticDiscordBot:
         except Exception as e:
             logger.error(f"Error updating radio info: {e}")
 
-    # SERIAL CONNECTION METHODS - Improved with health monitoring
+    # SERIAL CONNECTION METHODS
     async def _monitor_serial(self):
         """Monitor serial connection with automatic reconnection"""
         reconnect_attempts = 0
@@ -513,7 +507,7 @@ class MeshtasticDiscordBot:
                 logger.error(f"Error processing packet queue: {e}")
                 await asyncio.sleep(1)
 
-    # HTTP CONNECTION METHODS - Original functionality preserved
+    # HTTP CONNECTION METHODS
     async def _monitor_radios_http(self):
         """Monitor radios via HTTP - single poll per radio per cycle"""
         poll_count = 0
@@ -592,6 +586,7 @@ class MeshtasticDiscordBot:
         except Exception as e:
             logger.error(f"Error requesting radio info via HTTP: {e}")
 
+    # PACKET PROCESSING METHODS
     async def _process_protobuf_data(self, data: bytes, source: str):
         """Process protobuf data from HTTP API"""
         try:
@@ -682,7 +677,7 @@ class MeshtasticDiscordBot:
         except Exception as e:
             logger.error(f"Error processing packet from {source}: {e}")
             
-    def _get_message_info(self, decoded, from_id: int, rx_time: int, source: str, snr, rssi) -> Dict:
+    def _get_message_info(self, decoded, from_id: int, rx_time: int, source: str, snr, rssi) -> Optional[Dict]:
         """Extract message information based on port number"""
         # Use Discord timestamp format for user's local timezone
         if rx_time:

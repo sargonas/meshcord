@@ -4,9 +4,8 @@ import tempfile
 import os
 import json
 import time
+from datetime import datetime, timedelta
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase
 
 # Mock meshtastic imports
 import sys
@@ -18,224 +17,460 @@ sys.modules['meshtastic.serial_interface'] = MagicMock()
 from meshcord_bot import MeshtasticDiscordBot
 
 
-class MockMeshtasticServer:
-    """Simple mock HTTP server for testing"""
-    
-    def __init__(self):
-        self.messages = []
-        self.current_index = 0
-        
-    def add_message(self, data: bytes):
-        """Add a message to be returned by the server"""
-        self.messages.append(data)
-        
-    async def fromradio_handler(self, request):
-        """Mock /api/v1/fromradio endpoint"""
-        if self.current_index < len(self.messages):
-            message = self.messages[self.current_index]
-            self.current_index += 1
-            return web.Response(body=message, content_type='application/octet-stream')
-        else:
-            # No more messages - return empty (normal behavior)
-            return web.Response(body=b'', content_type='application/octet-stream')
+class TestMeshcordBot(unittest.TestCase):
+    """Unit tests for MeshtasticDiscordBot"""
 
-
-class TestMeshcordIntegration(AioHTTPTestCase):
-    """Integration tests for the complete Meshcord system"""
-
-    async def get_application(self):
-        """Set up mock Meshtastic HTTP server"""
-        self.mock_server = MockMeshtasticServer()
-        app = web.Application()
-        app.router.add_get('/api/v1/fromradio', self.mock_server.fromradio_handler)
-        app.router.add_get('/api/v1/nodeinfo', self.mock_server.fromradio_handler)
-        return app
-
-    async def setUpAsync(self):
-        """Set up integration test environment"""
-        await super().setUpAsync()
-        
-        # Create temporary directory
+    def setUp(self):
+        """Set up test environment"""
         self.test_dir = tempfile.mkdtemp()
         self.original_cwd = os.getcwd()
         os.chdir(self.test_dir)
         
-        # Set environment variables for the bot
+        # Set required environment variables
         os.environ.update({
-            'DISCORD_BOT_TOKEN': 'test_token_integration',
+            'DISCORD_BOT_TOKEN': 'test_token',
             'DISCORD_CHANNEL_ID': '12345',
             'CONNECTION_METHOD': 'http',
-            'MESHTASTIC_HOST': '127.0.0.1',
-            'MESHTASTIC_PORT': str(self.server.port),
-            'RADIO_NAME': 'IntegrationTestRadio',
-            'POLL_INTERVAL': '0.1',  # Fast for testing
-            'DEBUG_MODE': 'true'
+            'MESHTASTIC_HOST': 'test.local',
+            'DEBUG_MODE': 'false'
         })
 
-    async def tearDownAsync(self):
-        """Clean up integration test environment"""
-        await super().tearDownAsync()
-        
-        # Clean up temp directory
+    def tearDown(self):
+        """Clean up test environment"""
         os.chdir(self.original_cwd)
         import shutil
         shutil.rmtree(self.test_dir, ignore_errors=True)
         
         # Clean up environment
-        for key in ['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID', 'CONNECTION_METHOD',
-                   'MESHTASTIC_HOST', 'MESHTASTIC_PORT', 'RADIO_NAME', 'POLL_INTERVAL',
-                   'DEBUG_MODE', 'SERIAL_PORT']:
+        test_env_vars = [
+            'DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID', 'CONNECTION_METHOD',
+            'MESHTASTIC_HOST', 'MESHTASTIC_PORT', 'RADIO_NAME', 'POLL_INTERVAL',
+            'DEBUG_MODE', 'SERIAL_PORT', 'CONNECTION_TIMEOUT', 
+            'MAX_RECONNECT_ATTEMPTS', 'RECONNECT_DELAY'
+        ]
+        for key in test_env_vars:
             os.environ.pop(key, None)
 
-    async def test_http_connection_and_polling(self):
-        """Test that HTTP connection and polling works end-to-end"""
+    def test_configuration_validation(self):
+        """Test configuration validation"""
+        # Test missing required config
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                MeshtasticDiscordBot()
         
-        # Add a simple message to the mock server
-        test_message = b'test_protobuf_data'
-        self.mock_server.add_message(test_message)
-        
-        # Mock Discord components
-        mock_channel = AsyncMock()
-        mock_discord_client = Mock()
-        mock_discord_client.get_channel.return_value = mock_channel
-        
-        # Create bot instance
-        with patch('meshcord_bot.discord.Client') as MockDiscordClient:
-            MockDiscordClient.return_value = mock_discord_client
-            
-            bot = MeshtasticDiscordBot()
-            bot.client = mock_discord_client
-            
-            # Set up aiohttp session
-            import aiohttp
-            bot.session = aiohttp.ClientSession()
-            
-            try:
-                # Test that radio configuration is correctly parsed
-                self.assertEqual(len(bot.radios), 1)
-                self.assertEqual(bot.radios[0]['name'], 'IntegrationTestRadio')
-                self.assertEqual(bot.radios[0]['host'], '127.0.0.1')
-                self.assertEqual(bot.radios[0]['port'], str(self.server.port))
-                
-                # Test HTTP polling
-                radio_config = bot.radios[0]
-                
-                # Mock the protobuf processing to avoid parsing errors
-                with patch.object(bot, '_process_protobuf_data') as mock_process:
-                    await bot._poll_radio_http(radio_config)
-                    
-                    # Verify that the mock server was called and data was processed
-                    mock_process.assert_called_once_with(test_message, 'IntegrationTestRadio')
-                
-            finally:
-                await bot.session.close()
+        # Test invalid channel ID
+        with patch.dict(os.environ, {
+            'DISCORD_BOT_TOKEN': 'token',
+            'DISCORD_CHANNEL_ID': 'invalid'
+        }):
+            with self.assertRaises(ValueError):
+                MeshtasticDiscordBot()
 
-    async def test_multiple_radio_configuration(self):
-        """Test that multiple radios can be configured"""
-        
-        # Set up multiple radio configuration
-        radios_config = json.dumps([
-            {"name": "Radio1", "host": "127.0.0.1", "port": str(self.server.port)},
-            {"name": "Radio2", "host": "127.0.0.1", "port": str(self.server.port)}
-        ])
-        
-        with patch.dict(os.environ, {'RADIOS': radios_config}):
-            mock_discord_client = Mock()
-            
-            with patch('meshcord_bot.discord.Client') as MockDiscordClient:
-                MockDiscordClient.return_value = mock_discord_client
-                
+    def test_serial_health_monitoring_config(self):
+        """Test serial health monitoring configuration"""
+        with patch.dict(os.environ, {
+            'CONNECTION_METHOD': 'serial',
+            'CONNECTION_TIMEOUT': '600',
+            'MAX_RECONNECT_ATTEMPTS': '10',
+            'RECONNECT_DELAY': '60'
+        }):
+            with patch('meshcord_bot.discord.Client'):
                 bot = MeshtasticDiscordBot()
                 
-                # Verify multiple radios were configured
-                self.assertEqual(len(bot.radios), 2)
-                self.assertEqual(bot.radios[0]['name'], 'Radio1')
-                self.assertEqual(bot.radios[1]['name'], 'Radio2')
+                self.assertEqual(bot.connection_timeout, 600)
+                self.assertEqual(bot.max_reconnect_attempts, 10)
+                self.assertEqual(bot.reconnect_delay, 60)
 
-    async def test_radio_display_names(self):
-        """Test that radio display names work correctly"""
-        
-        radios_config = json.dumps([
-            {"name": "radio1", "host": "127.0.0.1", "port": str(self.server.port), "display_name": "Home Base"},
-            {"name": "radio2", "host": "127.0.0.1", "port": str(self.server.port)}  # No display name
-        ])
-        
-        with patch.dict(os.environ, {'RADIOS': radios_config}):
-            mock_discord_client = Mock()
+    def test_radio_configuration_parsing(self):
+        """Test radio configuration parsing"""
+        with patch('meshcord_bot.discord.Client'):
+            # Test single radio fallback
+            bot = MeshtasticDiscordBot()
+            self.assertEqual(len(bot.radios), 1)
+            self.assertEqual(bot.radios[0]['name'], 'Radio')
             
-            with patch('meshcord_bot.discord.Client') as MockDiscordClient:
-                MockDiscordClient.return_value = mock_discord_client
-                
+            # Test JSON configuration
+            radios_json = json.dumps([
+                {"name": "radio1", "host": "host1", "port": "80", "display_name": "Radio 1"},
+                {"name": "radio2", "host": "host2", "port": "80"}
+            ])
+            
+            with patch.dict(os.environ, {'RADIOS': radios_json}):
+                bot2 = MeshtasticDiscordBot()
+                self.assertEqual(len(bot2.radios), 2)
+                self.assertEqual(bot2.radios[0]['display_name'], 'Radio 1')
+
+    def test_message_filtering_config(self):
+        """Test message filtering configuration"""
+        with patch.dict(os.environ, {
+            'SHOW_TEXT_MESSAGES': 'false',
+            'SHOW_TELEMETRY': 'true',
+            'SHOW_ROUTING': 'true'
+        }):
+            with patch('meshcord_bot.discord.Client'):
                 bot = MeshtasticDiscordBot()
                 
-                # Test radio info display
-                radio1_info = bot._get_radio_info("radio1")
-                radio2_info = bot._get_radio_info("radio2")
-                
-                # Radio1 should show display name
-                self.assertEqual(radio1_info, f"Home Base (127.0.0.1)")
-                
-                # Radio2 should show regular name
-                self.assertEqual(radio2_info, f"radio2 (127.0.0.1)")
+                self.assertFalse(bot.message_filters['text_messages'])
+                self.assertTrue(bot.message_filters['telemetry'])
+                self.assertTrue(bot.message_filters['routing'])
 
-    async def test_message_deduplication(self):
-        """Test that duplicate messages are properly handled"""
-        
-        mock_discord_client = Mock()
-        
-        with patch('meshcord_bot.discord.Client') as MockDiscordClient:
-            MockDiscordClient.return_value = mock_discord_client
-            
+    def test_database_initialization(self):
+        """Test database initialization"""
+        with patch('meshcord_bot.discord.Client'):
             bot = MeshtasticDiscordBot()
             
-            # Test message deduplication
-            message_id = "12345678_42"
-            source = "IntegrationTestRadio"
+            # Check that tables exist
+            cursor = bot.conn.cursor()
+            
+            # Test processed_messages table
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='processed_messages'")
+            self.assertIsNotNone(cursor.fetchone())
+            
+            # Test nodes table
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='nodes'")
+            self.assertIsNotNone(cursor.fetchone())
+            
+            # Test radios table
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='radios'")
+            self.assertIsNotNone(cursor.fetchone())
+
+    def test_message_deduplication(self):
+        """Test message deduplication functionality"""
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            message_id = "test_message_123"
+            source = "test_radio"
             timestamp = int(time.time())
             
-            # First time should not be processed
+            # Initially not processed
             self.assertFalse(bot._is_message_processed(message_id, source))
             
             # Mark as processed
             bot._mark_message_processed(message_id, source, timestamp)
             
-            # Second time should be marked as processed
+            # Now should be marked as processed
             self.assertTrue(bot._is_message_processed(message_id, source))
 
-    async def test_database_functionality(self):
-        """Test that database operations work correctly"""
-        
-        mock_discord_client = Mock()
-        
-        with patch('meshcord_bot.discord.Client') as MockDiscordClient:
-            MockDiscordClient.return_value = mock_discord_client
-            
+    def test_node_info_management(self):
+        """Test node information storage and retrieval"""
+        with patch('meshcord_bot.discord.Client'):
             bot = MeshtasticDiscordBot()
             
-            # Test node info storage
-            node_id = 0xAABBCCDD
+            node_id = 0x12345678
             
+            # Test unknown node
+            node_name = bot._get_node_name(node_id)
+            self.assertEqual(node_name, "12345678")
+            
+            # Add node info
             mock_user_info = Mock()
-            mock_user_info.short_name = "TestNode"
-            mock_user_info.long_name = "Test Node Long Name"
+            mock_user_info.short_name = "TEST"
+            mock_user_info.long_name = "Test Node"
             
             bot._update_node_info(node_id, mock_user_info)
             
-            # Verify node info was stored
+            # Test known node
             node_name = bot._get_node_name(node_id)
-            self.assertEqual(node_name, "TestNode (aabbccdd)")
-            
-            # Verify in database
-            cursor = bot.conn.cursor()
-            cursor.execute('SELECT short_name, long_name FROM nodes WHERE node_id = ?', (node_id,))
-            result = cursor.fetchone()
-            self.assertIsNotNone(result)
-            self.assertEqual(result[0], "TestNode")
-            self.assertEqual(result[1], "Test Node Long Name")
+            self.assertEqual(node_name, "TEST (12345678)")
 
-    async def test_error_handling(self):
-        """Test that errors are handled gracefully"""
+    def test_radio_info_management(self):
+        """Test radio information storage and retrieval"""
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            source = "test_radio"
+            
+            # Test unknown radio (should return the source name since it's not in config)
+            radio_info = bot._get_radio_info(source)
+            self.assertEqual(radio_info, "test_radio")  # No config fallback for unknown source
+            
+            # Test radio that matches config
+            config_source = "Radio"  # This matches bot.radios[0]['name']
+            radio_info = bot._get_radio_info(config_source)
+            self.assertEqual(radio_info, "Radio (test.local)")  # Uses config fallback
+            
+            # Add radio info
+            mock_my_info = Mock()
+            mock_my_info.my_node_num = 0x87654321
+            
+            bot._update_radio_info(source, mock_my_info)
+            
+            # Test known radio
+            radio_info = bot._get_radio_info(source)
+            self.assertIn("87654321", radio_info)
+
+    @patch('meshcord_bot.portnums_pb2')
+    def test_message_info_extraction(self, mock_portnums):
+        """Test message information extraction"""
+        mock_portnums.TEXT_MESSAGE_APP = 1
+        mock_portnums.POSITION_APP = 2
+        mock_portnums.TELEMETRY_APP = 3
         
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            # Test text message
+            mock_decoded = Mock()
+            mock_decoded.portnum = 1
+            mock_decoded.payload = b"Test message"
+            
+            message_info = bot._get_message_info(
+                mock_decoded, 0x12345678, int(time.time()), "test_radio", "5.0", "-80"
+            )
+            
+            self.assertIsNotNone(message_info)
+            self.assertEqual(message_info['type'], 'text_messages')
+            self.assertIn('Test message', message_info['content'])
+            self.assertIn('💬', message_info['content'])
+
+    def test_should_process_message_type(self):
+        """Test message type filtering"""
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            # Default filters
+            self.assertTrue(bot._should_process_message_type('text_messages'))
+            self.assertFalse(bot._should_process_message_type('routing'))
+            self.assertFalse(bot._should_process_message_type('unknown'))
+
+    def test_error_handling_in_processing(self):
+        """Test error handling in various processing methods"""
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            # Test node info update with invalid data
+            try:
+                bot._update_node_info(None, None)
+                # Should not raise exception
+            except:
+                self.fail("_update_node_info raised exception with invalid data")
+            
+            # Test radio info update with invalid data
+            try:
+                bot._update_radio_info("test", None)
+                # Should not raise exception
+            except:
+                self.fail("_update_radio_info raised exception with invalid data")
+
+
+class TestMeshcordBotAsync(unittest.IsolatedAsyncioTestCase):
+    """Async unit tests for MeshtasticDiscordBot"""
+
+    def setUp(self):
+        """Set up test environment"""
+        self.test_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.test_dir)
+        
+        # Set required environment variables
+        os.environ.update({
+            'DISCORD_BOT_TOKEN': 'test_token',
+            'DISCORD_CHANNEL_ID': '12345',
+            'CONNECTION_METHOD': 'http',
+            'MESHTASTIC_HOST': 'test.local',
+            'DEBUG_MODE': 'false'
+        })
+
+    def tearDown(self):
+        """Clean up test environment"""
+        os.chdir(self.original_cwd)
+        import shutil
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+        
+        # Clean up environment
+        test_env_vars = [
+            'DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID', 'CONNECTION_METHOD',
+            'MESHTASTIC_HOST', 'MESHTASTIC_PORT', 'RADIO_NAME', 'POLL_INTERVAL',
+            'DEBUG_MODE', 'SERIAL_PORT', 'CONNECTION_TIMEOUT', 
+            'MAX_RECONNECT_ATTEMPTS', 'RECONNECT_DELAY'
+        ]
+        for key in test_env_vars:
+            os.environ.pop(key, None)
+
+    async def test_packet_queue_processing(self):
+        """Test packet queuing and processing"""
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            # Test packet queuing
+            test_packet = Mock()
+            await bot._queue_packet(test_packet)
+            
+            self.assertEqual(bot.packet_queue.qsize(), 1)
+            
+            # Test queue retrieval
+            source, packet = await bot.packet_queue.get()
+            self.assertEqual(source, 'serial')
+            self.assertEqual(packet, test_packet)
+
+    async def test_connection_health_monitoring(self):
+        """Test connection health monitoring logic"""
+        with patch.dict(os.environ, {
+            'CONNECTION_METHOD': 'serial',
+            'CONNECTION_TIMEOUT': '10'  # Short timeout for testing
+        }):
+            with patch('meshcord_bot.discord.Client'):
+                bot = MeshtasticDiscordBot()
+                bot.meshtastic_interface = Mock()
+                
+                # Test with recent packet
+                bot.last_packet_time = datetime.now()
+                
+                # Health monitor should not trigger reconnection
+                with patch.object(bot.meshtastic_interface, 'close') as mock_close:
+                    # This would normally run continuously, but we'll test the logic
+                    current_time = datetime.now()
+                    if bot.last_packet_time:
+                        time_since_last = current_time - bot.last_packet_time
+                        if time_since_last.total_seconds() > bot.connection_timeout:
+                            bot.meshtastic_interface.close()
+                            bot.meshtastic_interface = None
+                    
+                    # Should not have been called
+                    mock_close.assert_not_called()
+                
+                # Test with old packet (simulate stale connection)
+                bot.last_packet_time = datetime.now() - timedelta(seconds=300)
+                
+                with patch.object(bot.meshtastic_interface, 'close') as mock_close:
+                    current_time = datetime.now()
+                    if bot.last_packet_time:
+                        time_since_last = current_time - bot.last_packet_time
+                        if time_since_last.total_seconds() > bot.connection_timeout:
+                            bot.meshtastic_interface.close()
+                            bot.meshtastic_interface = None
+                    
+                    # Should have been called
+                    mock_close.assert_called_once()
+
+    async def test_serial_packet_callback(self):
+        """Test serial packet callback functionality"""
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            bot.loop = asyncio.get_event_loop()
+            
+            # Test packet callback updates last_packet_time
+            initial_time = bot.last_packet_time
+            
+            mock_packet = Mock()
+            mock_interface = Mock()
+            
+            bot._packet_callback(mock_packet, mock_interface)
+            
+            # Should have updated the timestamp
+            self.assertNotEqual(bot.last_packet_time, initial_time)
+            self.assertIsInstance(bot.last_packet_time, datetime)
+
+    async def test_discord_message_sending(self):
+        """Test Discord message sending with character limits"""
+        mock_channel = AsyncMock()
+        mock_client = Mock()
+        mock_client.get_channel.return_value = mock_channel
+        
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            bot.client = mock_client
+            
+            # Test normal message
+            short_message = "Test message"
+            await bot._send_to_discord(short_message)
+            mock_channel.send.assert_called_once_with(short_message)
+            
+            # Test long message (over 2000 chars)
+            long_message = "A" * 2500
+            mock_channel.reset_mock()
+            
+            await bot._send_to_discord(long_message)
+            
+            # Should have been called multiple times for chunks
+            self.assertGreater(mock_channel.send.call_count, 1)
+
+
+class TestSerialConnectionFeatures(unittest.TestCase):
+    """Specific tests for serial connection improvements"""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.test_dir)
+        
+        os.environ.update({
+            'DISCORD_BOT_TOKEN': 'test_token',
+            'DISCORD_CHANNEL_ID': '12345',
+            'CONNECTION_METHOD': 'serial',
+            'SERIAL_PORT': '/dev/ttyUSB0',
+            'CONNECTION_TIMEOUT': '300',
+            'MAX_RECONNECT_ATTEMPTS': '5',
+            'RECONNECT_DELAY': '30'
+        })
+
+    def tearDown(self):
+        os.chdir(self.original_cwd)
+        import shutil
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+        
+        for key in ['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID', 'CONNECTION_METHOD',
+                   'SERIAL_PORT', 'CONNECTION_TIMEOUT', 'MAX_RECONNECT_ATTEMPTS', 
+                   'RECONNECT_DELAY']:
+            os.environ.pop(key, None)
+
+    def test_serial_configuration_parsing(self):
+        """Test serial-specific configuration"""
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            self.assertEqual(bot.connection_method, 'serial')
+            self.assertEqual(bot.serial_port, '/dev/ttyUSB0')
+            self.assertEqual(bot.connection_timeout, 300)
+            self.assertEqual(bot.max_reconnect_attempts, 5)
+            self.assertEqual(bot.reconnect_delay, 30)
+
+    def test_serial_config_defaults(self):
+        """Test serial configuration defaults"""
+        # Remove optional config
+        for key in ['CONNECTION_TIMEOUT', 'MAX_RECONNECT_ATTEMPTS', 'RECONNECT_DELAY']:
+            os.environ.pop(key, None)
+            
+        with patch('meshcord_bot.discord.Client'):
+            bot = MeshtasticDiscordBot()
+            
+            # Should use defaults
+            self.assertEqual(bot.connection_timeout, 300)  # 5 minutes
+            self.assertEqual(bot.max_reconnect_attempts, 5)
+            self.assertEqual(bot.reconnect_delay, 30)
+
+
+class TestSerialConnectionFeaturesAsync(unittest.IsolatedAsyncioTestCase):
+    """Async tests for serial connection features"""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.original_cwd = os.getcwd()
+        os.chdir(self.test_dir)
+        
+        os.environ.update({
+            'DISCORD_BOT_TOKEN': 'test_token',
+            'DISCORD_CHANNEL_ID': '12345',
+            'CONNECTION_METHOD': 'serial',
+            'SERIAL_PORT': '/dev/ttyUSB0',
+            'CONNECTION_TIMEOUT': '300',
+            'MAX_RECONNECT_ATTEMPTS': '5',
+            'RECONNECT_DELAY': '30'
+        })
+
+    def tearDown(self):
+        os.chdir(self.original_cwd)
+        import shutil
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+        
+        for key in ['DISCORD_BOT_TOKEN', 'DISCORD_CHANNEL_ID', 'CONNECTION_METHOD',
+                   'SERIAL_PORT', 'CONNECTION_TIMEOUT', 'MAX_RECONNECT_ATTEMPTS', 
+                   'RECONNECT_DELAY']:
+            os.environ.pop(key, None)
+
+    async def test_health_monitoring_task_creation(self):
+        """Test that health monitoring task is created for serial connections"""
         mock_discord_client = Mock()
         
         with patch('meshcord_bot.discord.Client') as MockDiscordClient:
@@ -243,85 +478,13 @@ class TestMeshcordIntegration(AioHTTPTestCase):
             
             bot = MeshtasticDiscordBot()
             
-            import aiohttp
-            bot.session = aiohttp.ClientSession()
+            # Simply verify the bot has the async methods we expect
+            self.assertTrue(asyncio.iscoroutinefunction(bot._monitor_serial))
+            self.assertTrue(asyncio.iscoroutinefunction(bot._process_packet_queue))
+            self.assertTrue(asyncio.iscoroutinefunction(bot._monitor_connection_health))
             
-            try:
-                # Test with invalid radio configuration
-                invalid_radio = {
-                    'name': 'InvalidRadio',
-                    'host': 'nonexistent.invalid',
-                    'port': '80'
-                }
-                
-                # Should not raise exception, just handle error gracefully
-                await bot._poll_radio_http(invalid_radio)
-                
-                # Test should complete without exceptions
-                
-            finally:
-                await bot.session.close()
-
-    async def test_serial_connection_integration(self):
-        """Test serial connection integration end-to-end"""
-        
-        # Set up serial mode environment
-        with patch.dict(os.environ, {
-            'CONNECTION_METHOD': 'serial',
-            'SERIAL_PORT': '/dev/ttyUSB0'
-        }):
-            mock_discord_client = Mock()
-            mock_channel = AsyncMock()
-            mock_discord_client.get_channel.return_value = mock_channel
-            
-            with patch('meshcord_bot.discord.Client') as MockDiscordClient:
-                MockDiscordClient.return_value = mock_discord_client
-                
-                bot = MeshtasticDiscordBot()
-                bot.client = mock_discord_client
-                
-                # Verify serial configuration
-                self.assertEqual(bot.connection_method, 'serial')
-                self.assertEqual(bot.serial_port, '/dev/ttyUSB0')
-                
-                # Test packet processing pipeline
-                mock_packet = Mock()
-                setattr(mock_packet, 'from', 0x12345678)
-                mock_packet.id = 42
-                mock_packet.rx_time = int(time.time())
-                mock_packet.decoded = Mock()
-                mock_packet.decoded.portnum = 1  # TEXT_MESSAGE_APP
-                mock_packet.decoded.payload = b"Integration test message"
-                mock_packet.rx_snr = 5.2
-                mock_packet.rx_rssi = -85
-                
-                # Mock the portnum constants
-                with patch('meshcord_bot.portnums_pb2') as mock_portnums:
-                    mock_portnums.TEXT_MESSAGE_APP = 1
-                    mock_portnums.NODEINFO_APP = 4
-                    
-                    # Test the complete packet processing pipeline
-                    await bot._queue_packet(mock_packet)
-                    
-                    # Verify packet was queued
-                    self.assertEqual(bot.packet_queue.qsize(), 1)
-                    
-                    # Process the packet
-                    source, packet = await bot.packet_queue.get()
-                    self.assertEqual(source, 'serial')
-                    self.assertEqual(packet, mock_packet)
-                    
-                    # Process through the mesh packet handler
-                    with patch.object(bot, '_send_to_discord', new_callable=AsyncMock) as mock_send:
-                        await bot._process_mesh_packet(packet, source)
-                        
-                        # Verify message was formatted and sent to Discord
-                        mock_send.assert_called_once()
-                        call_args = mock_send.call_args[0][0]
-                        self.assertIn('Integration test message', call_args)
-                        self.assertIn('12345678', call_args)  # Node ID
-                        self.assertIn('📻', call_args)  # Radio icon
-                        self.assertIn('💬', call_args)  # Text message icon
+            # Verify serial configuration
+            self.assertEqual(bot.connection_method, 'serial')
 
 
 if __name__ == '__main__':

@@ -30,6 +30,11 @@ services:
       # Serial Configuration (if using CONNECTION_METHOD=serial)
       SERIAL_PORT: ${SERIAL_PORT:-/dev/ttyUSB0}
       
+      # Serial Connection Health Monitoring (if using CONNECTION_METHOD=serial)
+      CONNECTION_TIMEOUT: ${CONNECTION_TIMEOUT:-300}
+      MAX_RECONNECT_ATTEMPTS: ${MAX_RECONNECT_ATTEMPTS:-5}
+      RECONNECT_DELAY: ${RECONNECT_DELAY:-30}
+      
       # Message Filtering (optional - defaults shown)
       SHOW_TEXT_MESSAGES: ${SHOW_TEXT_MESSAGES:-true}
       SHOW_POSITION_UPDATES: ${SHOW_POSITION_UPDATES:-true}
