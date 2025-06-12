@@ -1,7 +1,7 @@
 # Meshcord - Meshtastic Discord Bridge
 
 [![Tests](https://github.com/sargonas/meshcord/actions/workflows/ci.yml/badge.svg)](https://github.com/sargonas/meshcord/actions/workflows/ci.yml)
-[![Docker Pulls](https://img.shields.io/docker/pulls/sargonas/meshcord.svg)](https://ghcr.io/sargonas/meshcord:latest)
+[![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-container-blue?logo=docker)](https://github.com/sargonas/meshcord/pkgs/container/meshcord)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A reliable Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay connected to your mesh network even when you're away from your radio!
