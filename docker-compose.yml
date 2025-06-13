@@ -1,6 +1,6 @@
 services:
   meshcord:
-    build: .
+    image: ghcr.io/sargonas/meshcord:latest
     container_name: meshcord-bot
     restart: unless-stopped
     
@@ -62,11 +62,7 @@ services:
     #   - /dev/ttyUSB0:/dev/ttyUSB0
     
     # Logging configuration
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
 
 volumes:
   meshcord_data:
+    external: true #if using data persistence
