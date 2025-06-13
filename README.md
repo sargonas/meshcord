@@ -9,9 +9,9 @@ A reliable Discord bridge for Meshtastic networks that automatically forwards me
 ## Features
 
 ### Dual Connection Methods
-- **HTTP API Connection** (Default): Network-based connection for WiFi-enabled radios
-- **Serial Connection**: Direct USB connection for maximum reliability
-- **Multi-Radio Support**: Monitor multiple Meshtastic devices simultaneously
+- **HTTP API Connection** (Default, good): Network-based connection for WiFi-enabled radios
+- **Serial Connection**: (Best) Direct USB connection for maximum reliability
+- **Multi-Radio Support**: Monitor multiple Meshtastic devices simultaneously when using http
 
 ### Smart Message Handling
 - **Real-time Discord integration** - Messages appear instantly in your Discord channel
@@ -23,12 +23,12 @@ A reliable Discord bridge for Meshtastic networks that automatically forwards me
 
 ### Flexible Message Filtering
 - **Granular control** - Choose which message types to forward
-- **Smart node identification** - Shows friendly node names instead of hex IDs
+- **Smart node identification** - Shows friendly node names instead of their hex IDs (once at least one info packet has been received from that node)
 - **Enhanced message formatting** - Rich Discord messages with radio source identification
 
 ### Data Management
 - **Automatic database cleanup** - Configurable retention for processed messages
-- **Node information tracking** - Stores and displays node names and details
+- **Node information tracking** - Stores and displays node names and details based on info packets
 - **Message deduplication** - Prevents duplicate messages across polling cycles
 
 ## Message Types & Icons
@@ -53,7 +53,7 @@ A reliable Discord bridge for Meshtastic networks that automatically forwards me
 - Discord bot token and channel ID
 - Meshtastic device with network access or USB connection
 
-### 1. Clone and Configure
+### 1. Clone and Configure (optional)
 ```bash
 git clone https://github.com/sargonas/meshcord.git
 cd meshcord
@@ -136,6 +136,7 @@ services:
 
 volumes:
   meshcord_data:
+    external: true
 ```
 
 **For Serial Connection:**
@@ -158,6 +159,7 @@ services:
 
 volumes:
   meshcord_data:
+    external: true
 ```
 
 Then run:
@@ -202,7 +204,7 @@ SERIAL_PORT=/dev/ttyUSB0  # Linux/macOS
 **Serial Connection Requirements:**
 - Direct USB connection to Meshtastic device
 - Proper device permissions (see troubleshooting section)
-- Meshtastic Python library installed (`pip install meshtastic`)
+- Meshtastic Python library installed (`pip install meshtastic` or simply `pip install -r requirements.txt` if source code was pulled)
 
 #### Multiple Radio Monitoring (HTTP Only)
 ```bash
@@ -261,52 +263,6 @@ SHOW_SIGNAL_STRENGTH=true      # Include SNR and RSSI data in messages
 📶 SNR: 7.8 | RSSI: -78
 ```
 
-## Development Setup
-
-### Local Development
-```bash
-# Clone repository
-git clone https://github.com/sargonas/meshcord.git
-cd meshcord
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/macOS
-# venv\Scripts\activate    # Windows
-
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements-test.txt
-
-# Run the bot
-python meshcord_bot.py
-```
-
-### Testing
-```bash
-# Run all tests
-python -m pytest tests/ -v
-
-# Run unit tests only
-python -m pytest tests/test_meshcord.py -v
-
-# Run integration tests only
-python -m pytest tests/test_integration.py -v
-
-# Run with coverage
-python -m coverage run -m pytest tests/
-python -m coverage report
-```
-
-### Docker Development
-```bash
-# Build development image
-docker build -t meshcord:dev .
-
-# Run with development settings
-docker run -it --env-file .env meshcord:dev
-```
-
 ## Troubleshooting
 
 ### Common Issues
@@ -324,10 +280,6 @@ docker run -it --env-file .env meshcord:dev
 # Check device permissions (Linux/macOS)
 ls -la /dev/tty*
 
-# Add user to dialout group (Linux)
-sudo usermod -a -G dialout $USER
-# Log out and log back in
-
 # For macOS, you might need:
 sudo dseditgroup -o edit -a $USER -t user wheel
 
@@ -341,19 +293,16 @@ system_profiler SPUSBDataType | grep -A 5 -B 5 "Meshtastic"  # macOS
 # Ensure device is mapped correctly
 docker run --device=/dev/ttyUSB0:/dev/ttyUSB0 ...
 
-# Check if device exists in container
-docker exec meshcord-bot ls -la /dev/tty*
-
 # For Docker Compose, ensure devices section is correct:
 devices:
   - "/dev/ttyUSB0:/dev/ttyUSB0"
+
+# For Linux, ensure permissions are correct
+sudo chmod a+rw /dev/ttyUSB0
 ```
 
 **Serial Port Detection:**
 ```bash
-# Find available serial ports
-python -c "import serial.tools.list_ports; print([port.device for port in serial.tools.list_ports.comports()])"
-
 # Test Meshtastic connection
 meshtastic --port /dev/ttyUSB0 --info
 ```
@@ -365,15 +314,6 @@ curl http://192.168.1.100/api/v1/fromradio
 
 # Check radio web interface
 # Navigate to http://192.168.1.100 in browser
-```
-
-#### High CPU Usage
-```bash
-# Check polling interval (HTTP mode only)
-echo $POLL_INTERVAL  # Should be ≥ 1.0 for production
-
-# Monitor resource usage
-docker stats meshcord-bot
 ```
 
 #### Database Issues
@@ -410,7 +350,7 @@ DEBUG_MODE=true
 | Method | Reliability | Setup Difficulty | Multi-Radio | Use Case |
 |--------|-------------|------------------|-------------|----------|
 | Serial | ~99%* | Easy | No | Direct USB connection |
-| HTTP | ~85-90% | Medium | Yes | Network/WiFi connection |
+| HTTP | ~80-90% | Medium | Yes | Network/WiFi connection |
 
 **Serial Connection Notes:**
 - Uses the Meshtastic Python library for direct device communication
@@ -418,6 +358,7 @@ DEBUG_MODE=true
 - Requires physical USB connection to the device
 - Single radio per instance
 - **Built-in resilience**: Automatic error recovery and connection health monitoring
+- All messages received by radio are queued up and passed along in sequence without fail
 
 **HTTP Connection Notes:**
 - Polls the device's web API for new messages
@@ -454,23 +395,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - **Discord.py** - For the excellent Discord API library
 - **Contributors** - Everyone who helps improve Meshcord
 
-## Related Projects
-
-- [Meshtastic](https://meshtastic.org/) - The mesh networking platform
-- [Meshtastic Python](https://github.com/meshtastic/Meshtastic-python) - Python API library
-- [Discord.py](https://github.com/Rapptz/discord.py) - Discord API wrapper
-
 ## Support
 
 - **GitHub Issues**: [Report bugs or request features](https://github.com/sargonas/meshcord/issues)
-- **Discord**: [Meshtastic Discord Community](https://discord.gg/ktMAKGBnBs)
-
 ---
-
-<div align="center">
-
-**Made with ❤️ for the Meshtastic community**
-
-[⭐ Star this project](https://github.com/sargonas/meshcord) | [🐛 Report issues](https://github.com/sargonas/meshcord/issues) | [💡 Request features](https://github.com/sargonas/meshcord/issues/new)
-
-</div>
