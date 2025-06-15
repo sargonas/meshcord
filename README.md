@@ -4,27 +4,27 @@
 [![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-container-blue?logo=docker)](https://github.com/sargonas/meshcord/pkgs/container/meshcord)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A reliable Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay connected to your mesh network even when you're away from your radio!
+A reliable Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay up to date with what's happening on your mesh network even when you're away from your radio!
 
 ## Features
 
 ### Dual Connection Methods
-- **HTTP API Connection** (Default, good): Network-based connection for WiFi-enabled radios
+- **HTTP API Connection** (Good): Network-based connection for WiFi-enabled radios
 - **Serial Connection**: (Best) Direct USB connection for maximum reliability
-- **Multi-Radio Support**: Monitor multiple Meshtastic devices simultaneously when using http
+- **Multi-Radio Support**: Monitor multiple Meshtastic devices simultaneously (when using http)
 
 ### Smart Message Handling
 - **Real-time Discord integration** - Messages appear instantly in your Discord channel
 - **Signal strength reporting** - Optional SNR and RSSI data display
 - **Discord timestamps** - Shows time in each user's local timezone
 - **Duplicate prevention** - Automatic deduplication of repeat messages
-- **Persistent node database** - Remembers node names across restarts
+- **Persistent node database** - Remembers node names across restarts and matches them to radio hashes
 - **Custom radio names** - Friendly display names for multi-radio setups
 
 ### Flexible Message Filtering
-- **Granular control** - Choose which message types to forward
+- **Granular control** - Choose which message types to forward to Discord
 - **Smart node identification** - Shows friendly node names instead of their hex IDs (once at least one info packet has been received from that node)
-- **Enhanced message formatting** - Rich Discord messages with radio source identification
+- **Enhanced message formatting** - Rich Discord messages with radio source identification, and location links (when available)
 
 ### Data Management
 - **Automatic database cleanup** - Configurable retention for processed messages
@@ -49,9 +49,9 @@ A reliable Discord bridge for Meshtastic networks that automatically forwards me
 ## Quick Start
 
 ### Prerequisites
-- Docker and Docker Compose (recommended) OR Python 3.8+
+- Docker and Docker Compose (recommended) OR Python 3.8+ and python modules from requirements.txt
 - Discord bot token and channel ID
-- Meshtastic device with network access or USB connection
+- Meshtastic device with network access or USB serial connection
 
 ### 1. Clone and Configure (optional)
 ```bash
@@ -66,7 +66,7 @@ cp .env.example .env
 3. Add bot to your server with "Send Messages" permission
 4. Get your channel ID (Enable Developer Mode → Right-click channel → Copy ID)
 
-### 3. Configure Environment
+### 3. Configure Environment (Only needed if optional step 1 chosen, otherwise these values are set in Docker Compose)
 Edit `.env` with your settings:
 ```bash
 # Required
@@ -191,14 +191,15 @@ MESHTASTIC_HOST=192.168.1.100
 MESHTASTIC_PORT=80
 RADIO_NAME=HomeRadio
 RADIO_DISPLAY_NAME="Home Base Station"  # Optional: Custom name for Discord
-POLL_INTERVAL=2.0  # Seconds between polls
+POLL_INTERVAL=2.0  # Seconds between polls. Note that messages received between polling periods can be overwritten by new incomming messages and lost
 ```
 
 #### Serial Connection
 ```bash
 CONNECTION_METHOD=serial
 SERIAL_PORT=/dev/ttyUSB0  # Linux/macOS
-# SERIAL_PORT=COM3        # Windows (when running natively)
+or
+SERIAL_PORT=COM3        # Windows (when running natively)
 ```
 
 **Serial Connection Requirements:**
@@ -398,4 +399,5 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## Support
 
 - **GitHub Issues**: [Report bugs or request features](https://github.com/sargonas/meshcord/issues)
+- **Comments and Feedback**: [Non-issues can be opened in Discussions](https://github.com/sargonas/meshcord/discussions)
 ---
