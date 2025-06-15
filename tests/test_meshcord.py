@@ -411,7 +411,7 @@ class TestSerialConnectionFeatures(unittest.TestCase):
             
             self.assertEqual(bot.connection_method, 'serial')
             self.assertEqual(bot.serial_port, '/dev/ttyUSB0')
-            self.assertEqual(bot.serial_timeout, 300)  # Changed from connection_timeout
+            self.assertEqual(bot.serial_timeout, 240)  # Updated to new default (4 minutes)
 
     def test_serial_config_defaults(self):
         """Test serial configuration defaults"""
@@ -471,7 +471,7 @@ class TestSerialConnectionFeaturesAsync(unittest.IsolatedAsyncioTestCase):
             
             # Verify serial configuration
             self.assertEqual(bot.connection_method, 'serial')
-            self.assertEqual(bot.serial_timeout, 300)  # Default timeout
+            self.assertEqual(bot.serial_timeout, 240)  # Updated to new default (4 minutes)
 
 
 if __name__ == '__main__':
