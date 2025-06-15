@@ -310,9 +310,7 @@ class TestMeshcordIntegration(AioHTTPTestCase):
         with patch.dict(os.environ, {
             'CONNECTION_METHOD': 'serial',
             'SERIAL_PORT': '/dev/ttyUSB0',
-            'CONNECTION_TIMEOUT': '60',
-            'MAX_RECONNECT_ATTEMPTS': '3',
-            'RECONNECT_DELAY': '10'
+            'SERIAL_TIMEOUT': '60'  # Updated to new config
         }):
             mock_discord_client = Mock()
             mock_channel = AsyncMock()
@@ -327,11 +325,9 @@ class TestMeshcordIntegration(AioHTTPTestCase):
                 # Verify serial configuration
                 self.assertEqual(bot.connection_method, 'serial')
                 self.assertEqual(bot.serial_port, '/dev/ttyUSB0')
-                self.assertEqual(bot.connection_timeout, 60)
-                self.assertEqual(bot.max_reconnect_attempts, 3)
-                self.assertEqual(bot.reconnect_delay, 10)
+                self.assertEqual(bot.serial_timeout, 60)  # Updated attribute name
                 
-                # Test packet processing pipeline
+                # Test packet processing pipeline (keep existing test code)
                 mock_packet = Mock()
                 setattr(mock_packet, 'from', 0x12345678)
                 mock_packet.id = 42
@@ -371,11 +367,11 @@ class TestMeshcordIntegration(AioHTTPTestCase):
                         self.assertIn('💬', call_args)  # Text message icon
 
     async def test_serial_health_monitoring_integration(self):
-        """Test serial health monitoring integration"""
+        """Test serial timeout monitoring integration"""
         
         with patch.dict(os.environ, {
             'CONNECTION_METHOD': 'serial',
-            'CONNECTION_TIMEOUT': '5'  # Very short for testing
+            'SERIAL_TIMEOUT': '5'  # Very short for testing
         }):
             mock_discord_client = Mock()
             
@@ -385,21 +381,18 @@ class TestMeshcordIntegration(AioHTTPTestCase):
                 bot = MeshtasticDiscordBot()
                 bot.meshtastic_interface = Mock()
                 
-                # Simulate old packet time (stale connection)
+                # Simulate old packet time (timeout condition)
                 bot.last_packet_time = datetime.now() - timedelta(seconds=10)
                 
-                # Test health monitoring logic
+                # Test timeout detection logic
                 current_time = datetime.now()
                 if bot.last_packet_time:
                     time_since_last = current_time - bot.last_packet_time
-                    if time_since_last.total_seconds() > bot.connection_timeout:
-                        # Health monitor would close interface
-                        with patch.object(bot.meshtastic_interface, 'close') as mock_close:
-                            bot.meshtastic_interface.close()
-                            bot.meshtastic_interface = None
-                            bot.last_packet_time = None
-                            
-                            mock_close.assert_called_once()
+                    should_timeout = time_since_last.total_seconds() > bot.serial_timeout
+                    
+                    # Should detect timeout condition
+                    self.assertTrue(should_timeout)
+                    self.assertEqual(bot.serial_timeout, 5)  # Verify config was applied
 
     async def test_packet_callback_integration(self):
         """Test packet callback updates health monitoring"""
@@ -615,9 +608,7 @@ class TestSerialConnectionIntegration(unittest.TestCase):
         """Test serial configuration is properly integrated"""
         
         with patch.dict(os.environ, {
-            'CONNECTION_TIMEOUT': '120',
-            'MAX_RECONNECT_ATTEMPTS': '10',
-            'RECONNECT_DELAY': '45'
+            'SERIAL_TIMEOUT': '120'  # Updated to new config name
         }):
             with patch('meshcord_bot.discord.Client'):
                 bot = MeshtasticDiscordBot()
@@ -625,9 +616,7 @@ class TestSerialConnectionIntegration(unittest.TestCase):
                 # Verify all serial config is loaded
                 self.assertEqual(bot.connection_method, 'serial')
                 self.assertEqual(bot.serial_port, '/dev/ttyUSB0')
-                self.assertEqual(bot.connection_timeout, 120)
-                self.assertEqual(bot.max_reconnect_attempts, 10)
-                self.assertEqual(bot.reconnect_delay, 45)
+                self.assertEqual(bot.serial_timeout, 120)  # Updated attribute name
 
 
 class TestSerialConnectionIntegrationAsync(unittest.IsolatedAsyncioTestCase):
@@ -674,7 +663,11 @@ class TestSerialConnectionIntegrationAsync(unittest.IsolatedAsyncioTestCase):
             # Simply verify the methods exist and are coroutines
             self.assertTrue(asyncio.iscoroutinefunction(bot._monitor_serial))
             self.assertTrue(asyncio.iscoroutinefunction(bot._process_packet_queue))
-            self.assertTrue(asyncio.iscoroutinefunction(bot._monitor_connection_health))
+            self.assertTrue(asyncio.iscoroutinefunction(bot._create_serial_interface))
+            self.assertTrue(asyncio.iscoroutinefunction(bot._close_serial_interface))
+            
+            # Verify simplified configuration
+            self.assertEqual(bot.serial_timeout, 240)  # Default timeout
 
 
 if __name__ == '__main__':

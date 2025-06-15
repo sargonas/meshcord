@@ -358,8 +358,8 @@ DEBUG_MODE=true
 - Receives packets in real-time as they arrive
 - Requires physical USB connection to the device
 - Single radio per instance
-- **Built-in resilience**: Automatic error recovery and connection health monitoring
-- All messages received by radio are queued up and passed along in sequence without fail
+- Automatic connection recovery. Will reset serial connection if 240 seconds passes with no connection. (Can be changed by setting the `SERIAL_TIMEOUT` variable)
+- All messages received by radio are queued up and passed along in sequence withotu loss, like HTTP
 
 **HTTP Connection Notes:**
 - Polls the device's web API for new messages
@@ -367,7 +367,7 @@ DEBUG_MODE=true
 - Can monitor multiple radios from one instance
 - Works over network/WiFi connections
 
-*\*Serial reliability note: While the underlying serial connection can experience occasional data corruption and protocol errors (common with USB/serial communications), Meshcord includes robust error handling that automatically recovers from these issues. You may see occasional parsing errors in the logs, but these are safely handled and do not affect message forwarding.*
+*\*Serial reliability note: While the underlying serial connection can experience occasional data corruption and protocol errors (common with USB/serial communications), Meshcord includes robust error handling that automatically recovers from these issues. You may see occasional parsing errors in the logs, but these are safely handled and do not affect message forwarding. Meshtastic logging is "chatty" and these errors can mostly be ignored.*
 
 If you must use HTTP, optimize with:
 ```bash

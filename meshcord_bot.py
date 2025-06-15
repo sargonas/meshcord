@@ -55,11 +55,9 @@ class MeshtasticDiscordBot:
         self.meshtastic_interface = None
         self.packet_queue = asyncio.Queue()
         
-        # Connection health monitoring
+        # Serial timeout monitoring
         self.last_packet_time = None
-        self.connection_timeout = int(os.getenv('CONNECTION_TIMEOUT', '300'))  # 5 minutes
-        self.max_reconnect_attempts = int(os.getenv('MAX_RECONNECT_ATTEMPTS', '5'))
-        self.reconnect_delay = int(os.getenv('RECONNECT_DELAY', '30'))  # seconds
+        self.serial_timeout = int(os.getenv('SERIAL_TIMEOUT', '240'))  # 4 minutes default
         
     def _validate_required_config(self):
         """Validate required configuration"""
@@ -180,7 +178,6 @@ class MeshtasticDiscordBot:
                 logger.info(f"Starting serial connection to {self.serial_port}")
                 asyncio.create_task(self._monitor_serial())
                 asyncio.create_task(self._process_packet_queue())
-                asyncio.create_task(self._monitor_connection_health())
             else:
                 logger.info("Starting HTTP monitoring")
                 self.session = aiohttp.ClientSession()
@@ -308,177 +305,130 @@ class MeshtasticDiscordBot:
 
     # SERIAL CONNECTION METHODS
     async def _monitor_serial(self):
-        """Monitor serial connection with automatic reconnection"""
-        reconnect_attempts = 0
-        
+        """Serial connection with timeout-based reconnection"""
         while True:
             try:
-                logger.info(f"Connecting to Meshtastic device on {self.serial_port} (attempt {reconnect_attempts + 1})")
-                logger.info("Note: Initial protobuf parsing errors during connection are normal and harmless")
-                from meshtastic.serial_interface import SerialInterface
+                logger.info(f"Connecting to Meshtastic device on {self.serial_port}")
+                logger.info("Note: Initial protobuf parsing errors during connection are normal")
                 
-                self.loop = asyncio.get_event_loop()
-                
-                def create_interface():
-                    try:
-                        # Suppress all meshtastic library logging during initial connection
-                        import logging
-                        
-                        # Get all meshtastic-related loggers and suppress them
-                        loggers_to_suppress = [
-                            'meshtastic',
-                            'meshtastic.mesh_interface',
-                            'meshtastic.stream_interface',
-                            'meshtastic.serial_interface'
-                        ]
-                        original_levels = {}
-                        
-                        for logger_name in loggers_to_suppress:
-                            logger_obj = logging.getLogger(logger_name)
-                            original_levels[logger_name] = logger_obj.level
-                            logger_obj.setLevel(logging.CRITICAL)
-                        
-                        try:
-                            logger.info("Creating Meshtastic serial interface (suppressing library startup messages)")
-                            interface = SerialInterface(self.serial_port)
-                            
-                            # Give the interface time to stabilize and clear any buffer issues
-                            time.sleep(2)
-                            
-                            # Restore logging levels
-                            for logger_name, original_level in original_levels.items():
-                                logging.getLogger(logger_name).setLevel(original_level)
-                            
-                            # Set up packet interception
-                            original_handle_packet = interface._handlePacketFromRadio
-                            
-                            def packet_handler_wrapper(packet):
-                                try:
-                                    self._packet_callback(packet, interface)
-                                    return original_handle_packet(packet)
-                                except Exception as e:
-                                    if self.debug_mode:
-                                        logger.debug(f"Error in packet handler wrapper: {e}")
-                                    return original_handle_packet(packet)
-                            
-                            interface._handlePacketFromRadio = packet_handler_wrapper
-                            logger.info("Meshtastic serial interface created with packet interception")
-                            return interface
-                            
-                        except Exception as e:
-                            # Restore logging levels even if connection fails
-                            for logger_name, original_level in original_levels.items():
-                                logging.getLogger(logger_name).setLevel(original_level)
-                            raise e
-                            
-                    except Exception as e:
-                        logger.error(f"Error creating Meshtastic interface: {e}")
-                        return None
-                
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    self.meshtastic_interface = await self.loop.run_in_executor(executor, create_interface)
-                
-                if not self.meshtastic_interface:
-                    logger.error("Failed to create Meshtastic interface")
-                    reconnect_attempts += 1
-                    if reconnect_attempts >= self.max_reconnect_attempts:
-                        logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached")
-                        return
-                    await asyncio.sleep(self.reconnect_delay)
+                # Create interface
+                interface = await self._create_serial_interface()
+                if not interface:
+                    logger.error("Failed to create interface, retrying in 30 seconds")
+                    await asyncio.sleep(30)
                     continue
                 
-                logger.info("Meshtastic serial interface established successfully")
-                reconnect_attempts = 0  # Reset counter on successful connection
-                self.last_packet_time = datetime.now()  # Initialize packet timer
+                self.meshtastic_interface = interface
+                self.last_packet_time = datetime.now()
+                logger.info("Serial interface connected successfully")
                 
-                # Keep connection alive - let health monitor handle issues
+                # Monitor loop with simple timeout logic
                 while True:
-                    await asyncio.sleep(60)
-                        
-                    # Log heartbeat with detailed info
-                    time_since_last = "N/A"
+                    await asyncio.sleep(30)  # Check every 30 seconds
+                    
+                    # Calculate time since last packet
                     if self.last_packet_time:
-                        time_since_last = f"{(datetime.now() - self.last_packet_time).total_seconds():.1f}s"
+                        time_since_last = (datetime.now() - self.last_packet_time).total_seconds()
+                        
+                        # Log heartbeat
+                        logger.info(f"Serial heartbeat: {self.packet_queue.qsize()} packets queued, "
+                                  f"{time_since_last:.1f}s since last packet")
+                        
+                        # Timeout check
+                        if time_since_last > self.serial_timeout:
+                            logger.warning(f"No packets for {time_since_last:.1f}s (timeout: {self.serial_timeout}s)")
+                            logger.info("Reconnecting serial interface...")
+                            break  # Exit inner loop to reconnect
                     
-                    logger.info(f"Serial heartbeat: {self.packet_queue.qsize()} packets in queue, last packet: {time_since_last} ago")
-                    
-                    # Simple check: if interface becomes None, break to reconnect
+                    # Interface validity check
                     if not self.meshtastic_interface:
-                        logger.warning("Meshtastic interface has become None, attempting reconnection")
+                        logger.warning("Interface became None, reconnecting...")
                         break
                 
             except Exception as e:
                 logger.error(f"Serial connection error: {e}")
-                reconnect_attempts += 1
-                
-                # Properly cleanup the interface before reconnecting
-                if self.meshtastic_interface:
-                    try:
-                        logger.info("Closing existing Meshtastic interface before reconnection")
-                        self.meshtastic_interface.close()
-                        # Give it time to fully close
-                        await asyncio.sleep(2)
-                    except Exception as cleanup_error:
-                        logger.debug(f"Error during interface cleanup: {cleanup_error}")
-                    finally:
-                        self.meshtastic_interface = None
-                
-                if reconnect_attempts >= self.max_reconnect_attempts:
-                    logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached, giving up")
-                    return
-                    
-                logger.info(f"Attempting reconnect in {self.reconnect_delay} seconds...")
-                await asyncio.sleep(self.reconnect_delay)
+            
+            # Clean up before reconnecting
+            await self._close_serial_interface()
+            logger.info("Waiting 10 seconds before reconnection...")
+            await asyncio.sleep(10)
 
-    async def _monitor_connection_health(self):
-        """Monitor connection health and trigger reconnects if needed"""
-        logger.info("Starting connection health monitor")
-        
-        while True:
-            try:
-                await asyncio.sleep(120)  # Check every 2 minutes to be less aggressive
-                
-                if self.connection_method != 'serial':
-                    continue
+    async def _create_serial_interface(self):
+        """Create serial interface"""
+        try:
+            from meshtastic.serial_interface import SerialInterface
+            self.loop = asyncio.get_event_loop()
+            
+            def create_interface():
+                try:
+                    # Suppress meshtastic logging during connection
+                    import logging
+                    loggers_to_suppress = [
+                        'meshtastic', 'meshtastic.mesh_interface',
+                        'meshtastic.stream_interface', 'meshtastic.serial_interface'
+                    ]
+                    original_levels = {}
                     
-                # Skip health check if interface is not established
-                if not self.meshtastic_interface:
-                    continue
+                    for logger_name in loggers_to_suppress:
+                        logger_obj = logging.getLogger(logger_name)
+                        original_levels[logger_name] = logger_obj.level
+                        logger_obj.setLevel(logging.CRITICAL)
                     
-                current_time = datetime.now()
-                
-                # Check if we haven't received packets in too long
-                if self.last_packet_time:
-                    time_since_last = current_time - self.last_packet_time
-                    if time_since_last.total_seconds() > self.connection_timeout:
-                        logger.warning(f"Health monitor: No packets received for {time_since_last.total_seconds():.1f}s (timeout: {self.connection_timeout}s)")
-                        logger.warning("Health monitor: Connection appears genuinely stale, forcing reconnection...")
+                    try:
+                        interface = SerialInterface(self.serial_port)
+                        time.sleep(2)  # Stabilization time
                         
-                        # Properly close the interface to trigger reconnection
-                        if self.meshtastic_interface:
+                        # Restore logging levels
+                        for logger_name, original_level in original_levels.items():
+                            logging.getLogger(logger_name).setLevel(original_level)
+                        
+                        # Set up packet interception
+                        original_handle_packet = interface._handlePacketFromRadio
+                        def packet_handler_wrapper(packet):
                             try:
-                                logger.info("Health monitor: Closing stale interface")
-                                self.meshtastic_interface.close()
-                                await asyncio.sleep(3)  # Give more time for cleanup
+                                self._packet_callback(packet, interface)
+                                return original_handle_packet(packet)
                             except Exception as e:
-                                logger.debug(f"Error closing interface in health monitor: {e}")
-                            finally:
-                                self.meshtastic_interface = None
+                                if self.debug_mode:
+                                    logger.debug(f"Packet handler error: {e}")
+                                return original_handle_packet(packet)
                         
-                        # Clear the packet timer to prevent immediate re-trigger
-                        self.last_packet_time = None
+                        interface._handlePacketFromRadio = packet_handler_wrapper
+                        return interface
                         
-                        # The main monitor loop will detect the None interface and reconnect
-                        logger.info("Health monitor: Interface closed, main loop will handle reconnection")
+                    except Exception as e:
+                        # Restore logging even on failure
+                        for logger_name, original_level in original_levels.items():
+                            logging.getLogger(logger_name).setLevel(original_level)
+                        raise e
+                        
+                except Exception as e:
+                    logger.error(f"Error creating interface: {e}")
+                    return None
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                return await self.loop.run_in_executor(executor, create_interface)
                 
+        except Exception as e:
+            logger.error(f"Interface creation failed: {e}")
+            return None
+
+    async def _close_serial_interface(self):
+        """Clean interface closure"""
+        if self.meshtastic_interface:
+            try:
+                logger.info("Closing serial interface...")
+                self.meshtastic_interface.close()
+                await asyncio.sleep(2)  # Give time to clean up
             except Exception as e:
-                logger.error(f"Error in connection health monitor: {e}")
-                await asyncio.sleep(60)
+                logger.debug(f"Error during interface cleanup: {e}")
+            finally:
+                self.meshtastic_interface = None
 
     def _packet_callback(self, packet, interface):
         """Callback for received packets"""
         try:
-            # Update last packet time for health monitoring
+            # Update last packet time for timeout detection
             self.last_packet_time = datetime.now()
             
             if hasattr(self, 'loop') and self.loop:
@@ -486,7 +436,7 @@ class MeshtasticDiscordBot:
                     lambda: asyncio.create_task(self._queue_packet(packet))
                 )
         except Exception as e:
-            logger.error(f"Error in packet callback: {e}")
+            logger.error(f"Packet callback error: {e}")
     
     async def _queue_packet(self, packet):
         """Queue packet for processing"""
