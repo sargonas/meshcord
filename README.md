@@ -4,7 +4,7 @@
 [![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-container-blue?logo=docker)](https://github.com/sargonas/meshcord/pkgs/container/meshcord)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-A reliable Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay up to date with what's happening on your mesh network even when you're away from your radio!
+A Discord bridge for Meshtastic networks that automatically forwards messages and network activity to a Discord channel. Stay up to date with what's happening on your mesh network even when you're away from your radio! Great for those of us with home base station units who want to see what traffic has been going on when away from our daily driver mobile nodes.
 
 ## Features
 
