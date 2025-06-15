@@ -67,19 +67,15 @@ class TestMeshcordBot(unittest.TestCase):
                 MeshtasticDiscordBot()
 
     def test_serial_health_monitoring_config(self):
-        """Test serial health monitoring configuration"""
+        """Test serial timeout configuration"""
         with patch.dict(os.environ, {
             'CONNECTION_METHOD': 'serial',
-            'CONNECTION_TIMEOUT': '600',
-            'MAX_RECONNECT_ATTEMPTS': '10',
-            'RECONNECT_DELAY': '60'
+            'SERIAL_TIMEOUT': '180'
         }):
             with patch('meshcord_bot.discord.Client'):
                 bot = MeshtasticDiscordBot()
                 
-                self.assertEqual(bot.connection_timeout, 600)
-                self.assertEqual(bot.max_reconnect_attempts, 10)
-                self.assertEqual(bot.reconnect_delay, 60)
+                self.assertEqual(bot.serial_timeout, 180)
 
     def test_radio_configuration_parsing(self):
         """Test radio configuration parsing"""
@@ -305,10 +301,10 @@ class TestMeshcordBotAsync(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(packet, test_packet)
 
     async def test_connection_health_monitoring(self):
-        """Test connection health monitoring logic"""
+        """Test serial timeout logic"""
         with patch.dict(os.environ, {
             'CONNECTION_METHOD': 'serial',
-            'CONNECTION_TIMEOUT': '10'  # Short timeout for testing
+            'SERIAL_TIMEOUT': '10'  # Short timeout for testing
         }):
             with patch('meshcord_bot.discord.Client'):
                 bot = MeshtasticDiscordBot()
@@ -317,32 +313,25 @@ class TestMeshcordBotAsync(unittest.IsolatedAsyncioTestCase):
                 # Test with recent packet
                 bot.last_packet_time = datetime.now()
                 
-                # Health monitor should not trigger reconnection
-                with patch.object(bot.meshtastic_interface, 'close') as mock_close:
-                    # This would normally run continuously, but we'll test the logic
-                    current_time = datetime.now()
-                    if bot.last_packet_time:
-                        time_since_last = current_time - bot.last_packet_time
-                        if time_since_last.total_seconds() > bot.connection_timeout:
-                            bot.meshtastic_interface.close()
-                            bot.meshtastic_interface = None
+                # Check timeout logic
+                current_time = datetime.now()
+                if bot.last_packet_time:
+                    time_since_last = current_time - bot.last_packet_time
+                    should_timeout = time_since_last.total_seconds() > bot.serial_timeout
                     
-                    # Should not have been called
-                    mock_close.assert_not_called()
+                    # Should not timeout with recent packet
+                    self.assertFalse(should_timeout)
                 
-                # Test with old packet (simulate stale connection)
+                # Test with old packet (simulate timeout condition)
                 bot.last_packet_time = datetime.now() - timedelta(seconds=300)
                 
-                with patch.object(bot.meshtastic_interface, 'close') as mock_close:
-                    current_time = datetime.now()
-                    if bot.last_packet_time:
-                        time_since_last = current_time - bot.last_packet_time
-                        if time_since_last.total_seconds() > bot.connection_timeout:
-                            bot.meshtastic_interface.close()
-                            bot.meshtastic_interface = None
+                current_time = datetime.now()
+                if bot.last_packet_time:
+                    time_since_last = current_time - bot.last_packet_time
+                    should_timeout = time_since_last.total_seconds() > bot.serial_timeout
                     
-                    # Should have been called
-                    mock_close.assert_called_once()
+                    # Should timeout with old packet
+                    self.assertTrue(should_timeout)
 
     async def test_serial_packet_callback(self):
         """Test serial packet callback functionality"""
@@ -422,23 +411,19 @@ class TestSerialConnectionFeatures(unittest.TestCase):
             
             self.assertEqual(bot.connection_method, 'serial')
             self.assertEqual(bot.serial_port, '/dev/ttyUSB0')
-            self.assertEqual(bot.connection_timeout, 300)
-            self.assertEqual(bot.max_reconnect_attempts, 5)
-            self.assertEqual(bot.reconnect_delay, 30)
+            self.assertEqual(bot.serial_timeout, 300)  # Changed from connection_timeout
 
     def test_serial_config_defaults(self):
         """Test serial configuration defaults"""
         # Remove optional config
-        for key in ['CONNECTION_TIMEOUT', 'MAX_RECONNECT_ATTEMPTS', 'RECONNECT_DELAY']:
+        for key in ['SERIAL_TIMEOUT']:  # Updated to new config name
             os.environ.pop(key, None)
             
         with patch('meshcord_bot.discord.Client'):
             bot = MeshtasticDiscordBot()
             
             # Should use defaults
-            self.assertEqual(bot.connection_timeout, 300)  # 5 minutes
-            self.assertEqual(bot.max_reconnect_attempts, 5)
-            self.assertEqual(bot.reconnect_delay, 30)
+            self.assertEqual(bot.serial_timeout, 240)  # Updated default (4 minutes)
 
 
 class TestSerialConnectionFeaturesAsync(unittest.IsolatedAsyncioTestCase):
@@ -470,7 +455,7 @@ class TestSerialConnectionFeaturesAsync(unittest.IsolatedAsyncioTestCase):
             os.environ.pop(key, None)
 
     async def test_health_monitoring_task_creation(self):
-        """Test that health monitoring task is created for serial connections"""
+        """Test that serial interface methods exist"""
         mock_discord_client = Mock()
         
         with patch('meshcord_bot.discord.Client') as MockDiscordClient:
@@ -481,10 +466,12 @@ class TestSerialConnectionFeaturesAsync(unittest.IsolatedAsyncioTestCase):
             # Simply verify the bot has the async methods we expect
             self.assertTrue(asyncio.iscoroutinefunction(bot._monitor_serial))
             self.assertTrue(asyncio.iscoroutinefunction(bot._process_packet_queue))
-            self.assertTrue(asyncio.iscoroutinefunction(bot._monitor_connection_health))
+            self.assertTrue(asyncio.iscoroutinefunction(bot._create_serial_interface))
+            self.assertTrue(asyncio.iscoroutinefunction(bot._close_serial_interface))
             
             # Verify serial configuration
             self.assertEqual(bot.connection_method, 'serial')
+            self.assertEqual(bot.serial_timeout, 300)  # Default timeout
 
 
 if __name__ == '__main__':
