@@ -364,7 +364,6 @@ If you must use HTTP, optimize with:
 ```bash
 POLL_INTERVAL=1.0  # Faster polling (minimum recommended)
 ```
-
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
