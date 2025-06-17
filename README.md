@@ -317,41 +317,32 @@ curl http://192.168.1.100/api/v1/fromradio
 # Navigate to http://192.168.1.100 in browser
 ```
 
-#### Database Issues
-```bash
-# Check database integrity
-docker exec meshcord-bot sqlite3 /app/data/message_tracking.db "PRAGMA integrity_check;"
-
-# Manual cleanup
-docker exec meshcord-bot sqlite3 /app/data/message_tracking.db "VACUUM;"
-```
-
 ### Debug Mode
 Enable comprehensive logging:
 ```bash
 DEBUG_MODE=true
 ```
 
-### Connection Method Decision Guide
+### Connection Method Guide
 
 **Choose Serial When:**
 - You have direct USB access to the Meshtastic device
-- Maximum reliability is required
+- Maximum reliability is desired
 - You want real-time message delivery
 - Device doesn't have WiFi or network connectivity
 
 **Choose HTTP When:**
-- Device is network-connected but not locally accessible via USB
+- Device is network-connected but not practically accessible via USB
 - You want to monitor multiple radios simultaneously
 - Device is in a remote location
-- You're running Meshcord on a different machine than the radio
+- You have to run Meshcord on a different machine than the radio
 
 ## Connection Method Comparison
 
 | Method | Reliability | Setup Difficulty | Multi-Radio | Use Case |
 |--------|-------------|------------------|-------------|----------|
 | Serial | ~99%* | Easy | No | Direct USB connection |
-| HTTP | ~80-90% | Medium | Yes | Network/WiFi connection |
+| HTTP | ~80% | Medium | Yes | Network/WiFi connection |
 
 **Serial Connection Notes:**
 - Uses the Meshtastic Python library for direct device communication
@@ -363,7 +354,7 @@ DEBUG_MODE=true
 
 **HTTP Connection Notes:**
 - Polls the device's web API for new messages
-- API only holds one message at a time, so some messages may be missed with slow polling
+- API buffer only holds one message at a time, so some messages may be missed with slow polling
 - Can monitor multiple radios from one instance
 - Works over network/WiFi connections
 
@@ -372,18 +363,7 @@ DEBUG_MODE=true
 If you must use HTTP, optimize with:
 ```bash
 POLL_INTERVAL=1.0  # Faster polling (minimum recommended)
-DEBUG_MODE=true    # Monitor for missed messages
 ```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Commit your changes (`git commit -m 'Add amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
-
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
@@ -392,7 +372,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 - **Meshtastic Project** - For the amazing mesh networking platform
 - **Discord.py** - For the excellent Discord API library
-- **Contributors** - Everyone who helps improve Meshcord
+- **Contributors** - Everyone who's helped me improve Meshcord
 
 ## Support
 
