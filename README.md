@@ -8,10 +8,9 @@ A Discord bridge for Meshtastic networks that automatically forwards messages an
 
 ## Features
 
-### Dual Connection Methods
-- **HTTP API Connection** (Good): Network-based connection for WiFi-enabled radios
-- **Serial Connection**: (Best) Direct USB connection for maximum reliability
-- **Multi-Radio Support**: Monitor multiple Meshtastic devices simultaneously (when using http)
+### Serial Connection
+- **Direct USB connection** - Maximum reliability through direct serial communication
+- **Real-time message delivery** - Receives packets instantly as they arrive at the radio
 
 ### Smart Message Handling
 - **Real-time Discord integration** - Messages appear instantly in your Discord channel
@@ -19,7 +18,6 @@ A Discord bridge for Meshtastic networks that automatically forwards messages an
 - **Discord timestamps** - Shows time in each user's local timezone
 - **Duplicate prevention** - Automatic deduplication of repeat messages
 - **Persistent node database** - Remembers node names across restarts and matches them to radio hashes
-- **Custom radio names** - Friendly display names for multi-radio setups
 
 ### Flexible Message Filtering
 - **Granular control** - Choose which message types to forward to Discord
@@ -29,7 +27,7 @@ A Discord bridge for Meshtastic networks that automatically forwards messages an
 ### Data Management
 - **Automatic database cleanup** - Configurable retention for processed messages
 - **Node information tracking** - Stores and displays node names and details based on info packets
-- **Message deduplication** - Prevents duplicate messages across polling cycles
+- **Message deduplication** - Prevents duplicate messages from being forwarded
 
 ## Message Types & Icons
 
@@ -51,7 +49,7 @@ A Discord bridge for Meshtastic networks that automatically forwards messages an
 ### Prerequisites
 - Docker and Docker Compose (recommended) OR Python 3.8+ and python modules from requirements.txt
 - Discord bot token and channel ID
-- Meshtastic device with network access or USB serial connection
+- Meshtastic device with USB serial connection
 
 ### 1. Clone and Configure (optional)
 ```bash
@@ -73,9 +71,9 @@ Edit `.env` with your settings:
 DISCORD_BOT_TOKEN=your_bot_token_here
 DISCORD_CHANNEL_ID=your_channel_id_here
 
-# Connection method (http is default)
-CONNECTION_METHOD=http  # or 'serial'
-MESHTASTIC_HOST=192.168.1.100  # Your radio's IP (for HTTP mode)
+# Serial connection
+CONNECTION_METHOD=serial
+SERIAL_PORT=/dev/ttyUSB0  # Your serial device path
 ```
 
 ### 4. Deploy
@@ -85,18 +83,7 @@ MESHTASTIC_HOST=192.168.1.100  # Your radio's IP (for HTTP mode)
 # Create data volume
 docker volume create meshcord_data
 
-# Run with Docker directly
-docker run -d \
-  --name meshcord-bot \
-  --restart unless-stopped \
-  -e DISCORD_BOT_TOKEN=your_bot_token_here \
-  -e DISCORD_CHANNEL_ID=your_channel_id_here \
-  -e CONNECTION_METHOD=http \
-  -e MESHTASTIC_HOST=192.168.1.100 \
-  -v meshcord_data:/app/data \
-  ghcr.io/sargonas/meshcord:latest
-
-# For serial connection, add device mapping:
+# Run with Docker directly (serial connection)
 docker run -d \
   --name meshcord-bot \
   --restart unless-stopped \
@@ -115,31 +102,6 @@ docker logs -f meshcord-bot
 #### Option B: Using Docker Compose with Pre-built Image
 Create a simple `docker-compose.yml`:
 
-**For HTTP Connection:**
-```yaml
-services:
-  meshcord:
-    image: ghcr.io/sargonas/meshcord:latest
-    container_name: meshcord-bot
-    restart: unless-stopped
-    environment:
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
-      DISCORD_CHANNEL_ID: ${DISCORD_CHANNEL_ID}
-      CONNECTION_METHOD: ${CONNECTION_METHOD:-http}
-      MESHTASTIC_HOST: ${MESHTASTIC_HOST:-meshtastic.local}
-      MESHTASTIC_PORT: ${MESHTASTIC_PORT:-80}
-      RADIO_NAME: ${RADIO_NAME:-Radio}
-      POLL_INTERVAL: ${POLL_INTERVAL:-2.0}
-      DEBUG_MODE: ${DEBUG_MODE:-false}
-    volumes:
-      - meshcord_data:/app/data
-
-volumes:
-  meshcord_data:
-    external: true
-```
-
-**For Serial Connection:**
 ```yaml
 services:
   meshcord:
@@ -182,24 +144,12 @@ docker-compose logs -f meshcord
 
 ## Configuration Options
 
-### Connection Methods
-
-#### HTTP Connection (Default)
-```bash
-CONNECTION_METHOD=http
-MESHTASTIC_HOST=192.168.1.100
-MESHTASTIC_PORT=80
-RADIO_NAME=HomeRadio
-RADIO_DISPLAY_NAME="Home Base Station"  # Optional: Custom name for Discord
-POLL_INTERVAL=2.0  # Seconds between polls. Note that messages received between polling periods can be overwritten by new incomming messages and lost
-```
-
-#### Serial Connection
+### Serial Connection
 ```bash
 CONNECTION_METHOD=serial
 SERIAL_PORT=/dev/ttyUSB0  # Linux/macOS
-or
-SERIAL_PORT=COM3        # Windows (when running natively)
+# or
+SERIAL_PORT=COM3          # Windows (when running natively)
 ```
 
 **Serial Connection Requirements:**
@@ -207,15 +157,6 @@ SERIAL_PORT=COM3        # Windows (when running natively)
 - Proper device permissions (see troubleshooting section)
 - Meshtastic Python library installed (`pip install meshtastic` or simply `pip install -r requirements.txt` if source code was pulled)
 
-#### Multiple Radio Monitoring (HTTP Only)
-```bash
-RADIOS: |
-  [
-    {"name": "radio1", "host": "192.168.1.100", "port": "80", "display_name": "Home Base Station"},
-    {"name": "radio2", "host": "192.168.1.101", "port": "80", "display_name": "Mobile Unit"},
-    {"name": "radio3", "host": "10.0.0.50", "port": "80", "display_name": "Remote Repeater"}
-  ]
-```
 
 ### Message Filtering
 ```bash
@@ -239,27 +180,27 @@ SHOW_SIGNAL_STRENGTH=true      # Include SNR and RSSI data in messages
 
 ### Text Message (with signal strength)
 ```
-📻 **Home Base Station (192.168.1.100)** | **Alice (12345678)** | <t:1640995200:t>
+📻 **Meshtastic Radio** | **Alice (12345678)** | <t:1640995200:t>
 💬 Hello from the mesh network!
 📶 SNR: 5.2 | RSSI: -85
 ```
 
 ### Text Message (without signal strength)
 ```
-📻 **Home Base Station (192.168.1.100)** | **Alice (12345678)** | <t:1640995200:t>
+📻 **Meshtastic Radio** | **Alice (12345678)** | <t:1640995200:t>
 💬 Hello from the mesh network!
 ```
 
 ### Position Update
 ```
-📻 **Mobile Repeater (192.168.1.101)** | **Bob's Radio (87654321)** | <t:1640995300:t>
+📻 **Meshtastic Radio** | **Bob's Radio (87654321)** | <t:1640995300:t>
 📍 Position update
 📶 SNR: 3.1 | RSSI: -92
 ```
 
 ### Telemetry Data
 ```
-📻 **Remote Cabin (10.0.0.50)** | **Weather Station (abcdef12)** | <t:1640995400:t>
+📻 **Meshtastic Radio** | **Weather Station (abcdef12)** | <t:1640995400:t>
 📊 Telemetry data
 📶 SNR: 7.8 | RSSI: -78
 ```
@@ -271,7 +212,7 @@ SHOW_SIGNAL_STRENGTH=true      # Include SNR and RSSI data in messages
 #### No Messages Appearing
 1. **Check Discord Permissions**: Ensure bot has "Send Messages" permission
 2. **Verify Channel ID**: Confirm `DISCORD_CHANNEL_ID` is correct
-3. **Connection Issues**: Check radio IP/connectivity for HTTP mode
+3. **Serial Connection Issues**: Check USB device connectivity and permissions
 4. **Message Filtering**: Verify enabled message types in configuration
 
 #### Serial Connection Problems
@@ -308,14 +249,6 @@ sudo chmod a+rw /dev/ttyUSB0
 meshtastic --port /dev/ttyUSB0 --info
 ```
 
-#### HTTP Connection Problems
-```bash
-# Test radio connectivity
-curl http://192.168.1.100/api/v1/fromradio
-
-# Check radio web interface
-# Navigate to http://192.168.1.100 in browser
-```
 
 ### Debug Mode
 Enable comprehensive logging:
@@ -323,47 +256,24 @@ Enable comprehensive logging:
 DEBUG_MODE=true
 ```
 
-### Connection Method Guide
+### Serial Connection Benefits
 
-**Choose Serial When:**
-- You have direct USB access to the Meshtastic device
-- Maximum reliability is desired
-- You want real-time message delivery
-- Device doesn't have WiFi or network connectivity
+**Serial Connection Advantages:**
+- Direct USB access to the Meshtastic device provides maximum reliability
+- Real-time message delivery as packets arrive at the radio
+- No network connectivity required on the device
+- Robust error handling with automatic recovery from connection issues
 
-**Choose HTTP When:**
-- Device is network-connected but not practically accessible via USB
-- You want to monitor multiple radios simultaneously
-- Device is in a remote location
-- You have to run Meshcord on a different machine than the radio
+## Serial Connection Details
 
-## Connection Method Comparison
-
-| Method | Reliability | Setup Difficulty | Multi-Radio | Use Case |
-|--------|-------------|------------------|-------------|----------|
-| Serial | ~99%* | Easy | No | Direct USB connection |
-| HTTP | ~80% | Medium | Yes | Network/WiFi connection |
-
-**Serial Connection Notes:**
+**How Serial Connection Works:**
 - Uses the Meshtastic Python library for direct device communication
-- Receives packets in real-time as they arrive
+- Receives packets in real-time as they arrive at the radio
 - Requires physical USB connection to the device
-- Single radio per instance
-- Automatic connection recovery. Will reset serial connection if 240 seconds passes with no connection. (Can be changed by setting the `SERIAL_TIMEOUT` variable)
-- All messages received by radio are queued up and passed along in sequence withotu loss, like HTTP
+- Automatic connection recovery - will reset serial connection if 240 seconds passes with no connection (configurable via `SERIAL_TIMEOUT` variable)
+- All messages received by radio are queued up and passed along in sequence without loss
 
-**HTTP Connection Notes:**
-- Polls the device's web API for new messages
-- API buffer only holds one message at a time, so some messages may be missed with slow polling
-- Can monitor multiple radios from one instance
-- Works over network/WiFi connections
-
-*\*Serial reliability note: While the underlying serial connection can experience occasional data corruption and protocol errors (common with USB/serial communications), Meshcord includes robust error handling that automatically recovers from these issues. You may see occasional parsing errors in the logs, but these are safely handled and do not affect message forwarding. Meshtastic logging is "chatty" and these errors can mostly be ignored.*
-
-If you must use HTTP, optimize with:
-```bash
-POLL_INTERVAL=1.0  # Faster polling (minimum recommended)
-```
+**Serial Reliability Note:** While the underlying serial connection can experience occasional data corruption and protocol errors (common with USB/serial communications), Meshcord includes robust error handling that automatically recovers from these issues. You may see occasional parsing errors in the logs, but these are safely handled and do not affect message forwarding. Meshtastic logging is "chatty" and these errors can mostly be ignored.
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.

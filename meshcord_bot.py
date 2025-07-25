@@ -1,12 +1,10 @@
 import asyncio
-import json
 import logging
 import os
 import discord
-import aiohttp
 from datetime import datetime
 import sqlite3
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from meshtastic import mesh_pb2, portnums_pb2
 import time
 import concurrent.futures
@@ -24,13 +22,8 @@ class MeshtasticDiscordBot:
         self.discord_token = os.getenv('DISCORD_BOT_TOKEN')
         self.channel_id = int(os.getenv('DISCORD_CHANNEL_ID'))
         
-        # Connection method configuration
-        self.connection_method = os.getenv('CONNECTION_METHOD', 'http').lower()
+        # Serial connection configuration
         self.serial_port = os.getenv('SERIAL_PORT', '/dev/ttyUSB0')
-        
-        # HTTP configuration
-        self.radios = self._parse_radios()
-        self.poll_interval = float(os.getenv('POLL_INTERVAL', '2'))
         self.debug_mode = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
         
         # Message filtering
@@ -47,9 +40,6 @@ class MeshtasticDiscordBot:
         # Initialize database and connections
         self._init_database()
         self._setup_discord_events()
-        
-        # HTTP session
-        self.session = None
         
         # Serial interface and packet processing
         self.meshtastic_interface = None
@@ -70,33 +60,6 @@ class MeshtasticDiscordBot:
         except ValueError:
             raise ValueError("DISCORD_CHANNEL_ID must be a valid integer")
         
-    def _parse_radios(self) -> List[Dict[str, str]]:
-        """Parse radio configuration from environment variables"""
-        radios = []
-        
-        # Try JSON format first
-        radio_configs = os.getenv('RADIOS')
-        if radio_configs:
-            try:
-                radios = json.loads(radio_configs)
-            except json.JSONDecodeError:
-                logger.error("Invalid RADIOS JSON format")
-                
-        # Fallback to single radio
-        if not radios:
-            radio = {
-                "name": os.getenv('RADIO_NAME', 'Radio'),
-                "host": os.getenv('MESHTASTIC_HOST', 'meshtastic.local'),
-                "port": os.getenv('MESHTASTIC_PORT', '80')
-            }
-            # Add display name if configured
-            display_name = os.getenv('RADIO_DISPLAY_NAME')
-            if display_name:
-                radio["display_name"] = display_name
-            radios = [radio]
-            
-        logger.info(f"Configured radios: {[r.get('display_name', r['name']) for r in radios]}")
-        return radios
         
     def _parse_message_filters(self) -> Dict[str, bool]:
         """Parse message filtering configuration"""
@@ -174,20 +137,12 @@ class MeshtasticDiscordBot:
         async def on_ready():
             logger.info(f'Discord bot logged in as {self.client.user}')
             
-            if self.connection_method == 'serial':
-                logger.info(f"Starting serial connection to {self.serial_port}")
-                asyncio.create_task(self._monitor_serial())
-                asyncio.create_task(self._process_packet_queue())
-            else:
-                logger.info("Starting HTTP monitoring")
-                self.session = aiohttp.ClientSession()
-                asyncio.create_task(self._request_radio_info_http())
-                asyncio.create_task(self._monitor_radios_http())
+            logger.info(f"Starting serial connection to {self.serial_port}")
+            asyncio.create_task(self._monitor_serial())
+            asyncio.create_task(self._process_packet_queue())
                 
         @self.client.event
         async def on_disconnect():
-            if self.session:
-                await self.session.close()
             if self.meshtastic_interface:
                 try:
                     self.meshtastic_interface.close()
@@ -263,19 +218,14 @@ class MeshtasticDiscordBot:
         
         if result:
             node_id, short_name, long_name = result
-            display_name = short_name or long_name or source
+            display_name = short_name or long_name or "Serial Radio"
             if node_id:
                 return f"{display_name} ({node_id:08x})"
             else:
                 return display_name
         
-        # Fallback: find radio config and show display name
-        for radio in self.radios:
-            if radio['name'] == source:
-                display_name = radio.get('display_name', radio['name'])
-                return f"{display_name} ({radio['host']})"
-        
-        return source
+        # Fallback for serial connection
+        return f"Serial Radio ({source})"
         
     def _update_radio_info(self, source: str, my_info):
         """Update radio information from my_info message"""
@@ -457,88 +407,9 @@ class MeshtasticDiscordBot:
                 logger.error(f"Error processing packet queue: {e}")
                 await asyncio.sleep(1)
 
-    # HTTP CONNECTION METHODS
-    async def _monitor_radios_http(self):
-        """Monitor radios via HTTP - single poll per radio per cycle"""
-        poll_count = 0
-        
-        while True:
-            try:
-                # Recreate session every hour to prevent stale connections
-                if poll_count % (3600 / self.poll_interval) == 0 and poll_count > 0:
-                    logger.info("Recreating HTTP session to prevent stale connections")
-                    await self.session.close()
-                    self.session = aiohttp.ClientSession()
-                
-                tasks = [self._poll_radio_http(radio) for radio in self.radios]
-                await asyncio.gather(*tasks, return_exceptions=True)
-                
-                poll_count += 1
-                await asyncio.sleep(self.poll_interval)
-                
-            except Exception as e:
-                logger.error(f"HTTP monitoring error: {e}")
-                await asyncio.sleep(self.poll_interval)
-                
-    async def _poll_radio_http(self, radio: Dict[str, str]):
-        """Poll a single radio via HTTP API"""
-        radio_name = radio['name']
-        
-        try:
-            url = f"http://{radio['host']}:{radio['port']}/api/v1/fromradio"
-            timeout = aiohttp.ClientTimeout(total=3)
-            
-            if self.debug_mode:
-                logger.debug(f"Polling {radio_name} at {url}")
-            
-            async with self.session.get(url, timeout=timeout) as response:
-                if response.status == 200:
-                    data = await response.read()
-                    if data:
-                        if self.debug_mode:
-                            logger.debug(f"Received {len(data)} bytes from {radio_name}")
-                        await self._process_protobuf_data(data, radio_name)
-                    else:
-                        if self.debug_mode:
-                            logger.debug(f"No data from {radio_name}")
-                elif response.status == 503:
-                    # 503 is normal (no data available)
-                    if self.debug_mode:
-                        logger.debug(f"No messages available from {radio_name} (503)")
-                else:
-                    logger.warning(f"HTTP {response.status} from {radio_name}")
-                    
-        except asyncio.TimeoutError:
-            logger.warning(f"Timeout polling {radio_name}")
-        except Exception as e:
-            logger.warning(f"HTTP error from {radio_name}: {e}")
-
-    async def _request_radio_info_http(self):
-        """Request radio information from all HTTP radios"""
-        try:
-            await asyncio.sleep(1)
-            
-            for radio in self.radios:
-                try:
-                    url = f"http://{radio['host']}:{radio['port']}/api/v1/nodeinfo"
-                    timeout = aiohttp.ClientTimeout(total=5)
-                    
-                    async with self.session.get(url, timeout=timeout) as response:
-                        if response.status == 200:
-                            data = await response.read()
-                            if data:
-                                await self._process_protobuf_data(data, radio['name'])
-                        
-                except Exception as e:
-                    if self.debug_mode:
-                        logger.debug(f"Could not get nodeinfo from {radio['name']}: {e}")
-                        
-        except Exception as e:
-            logger.error(f"Error requesting radio info via HTTP: {e}")
-
     # PACKET PROCESSING METHODS
     async def _process_protobuf_data(self, data: bytes, source: str):
-        """Process protobuf data from HTTP API"""
+        """Process protobuf data from serial connection"""
         try:
             from_radio = mesh_pb2.FromRadio()
             from_radio.ParseFromString(data)
