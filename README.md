@@ -256,7 +256,9 @@ Enable comprehensive logging:
 DEBUG_MODE=true
 ```
 
-### Serial Connection Benefits
+### Serial Connection
+
+Previously this app supported both http and serial connections. However there were extreme drawbacks to http and tons of lost data and connection issues, so those have been deprecated to serial only
 
 **Serial Connection Advantages:**
 - Direct USB access to the Meshtastic device provides maximum reliability
